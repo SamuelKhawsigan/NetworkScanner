@@ -33,6 +33,9 @@ class Host:
     model: str | None = None
     open_ports: list[int] = field(default_factory=list)
     services: dict[int, str] = field(default_factory=dict)
+    # raw protocol-prober outputs keyed by source name (snmp, netbios, smb,
+    # mdns, upnp, http) — consumed by the fingerprint/classifier stages
+    signals: dict[str, object] = field(default_factory=dict)
     fingerprint_sources: list[str] = field(default_factory=list)
     confidence: int = 0
     confidence_label: str = "UNKNOWN"

@@ -308,9 +308,30 @@ def run_scan(cfg: ScanConfig, console: "Console") -> None:
             do_banner=do_banner,
         )
 
+    # Protocol probing (full mode): SNMP/NetBIOS/mDNS/UPnP/SMB/HTTP.
+    # Skipped in quick (ARP+OUI only) and stealth (no active probing).
+    if cfg.mode != "quick" and not cfg.stealth:
+        from concurrent.futures import ThreadPoolExecutor
+        from .scanner import protocols
+
+        console.print(
+            "[cyan]Protocol probing[/] — SNMP"
+            + ("(skipped)" if cfg.no_snmp else "")
+            + ", NetBIOS, mDNS, UPnP, SMB, HTTP …"
+        )
+        workers = min(50, max(4, len(hosts)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(
+                lambda h: protocols.probe_host(
+                    h, do_snmp=not cfg.no_snmp, timeout=float(cfg.timeout)
+                ),
+                hosts,
+            ))
+
     randomized = sum(1 for h in hosts if "RANDOMIZED_MAC" in h.risk_flags)
     identified = sum(1 for h in hosts if h.vendor)
     with_ports = sum(1 for h in hosts if h.open_ports)
+    named = sum(1 for h in hosts if h.hostname)
 
     console.print(build_host_table(hosts))
     if alerts:
@@ -321,6 +342,8 @@ def run_scan(cfg: ScanConfig, console: "Console") -> None:
     )
     if not cfg.no_ports:
         summary += f", {with_ports} with open ports"
+    if named:
+        summary += f", {named} named"
     console.print(summary + ".")
 
 
