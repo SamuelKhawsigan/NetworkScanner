@@ -266,8 +266,14 @@ def run_scan(cfg: ScanConfig, console: "Console") -> None:
     ARP discovery -> OUI -> port scan -> protocol probing -> classify, then
     prints the final report (table, ARP conflicts, alerts, summary).
     """
+    import time
+    from datetime import datetime, timezone
+
     from .scanner import arp
     from .display.live_view import LiveDashboard, StaticReporter
+
+    scan_started = time.monotonic()
+    scan_timestamp = datetime.now(timezone.utc)
 
     # OUI DB build prints to console, so do it before any live display starts.
     ensure_oui_db(console)
@@ -308,6 +314,10 @@ def run_scan(cfg: ScanConfig, console: "Console") -> None:
     _print_final_report(cfg, hosts, poison, console)
     _report_history(events, console)
 
+    if cfg.output:
+        _write_exports(cfg, hosts, scan_timestamp,
+                       time.monotonic() - scan_started, console)
+
 
 def _record_history(cfg, hosts, console: "Console"):
     """Diff against history.db and apply NEW_DEVICE/IP_CHANGED/MAC_CHANGED flags."""
@@ -331,6 +341,38 @@ def _report_history(events, console: "Console") -> None:
         counts[ev.event_type] = counts.get(ev.event_type, 0) + 1
     parts = ", ".join(f"{n} {t}" for t, n in sorted(counts.items()))
     console.print(f"[cyan]History:[/] {parts} since last scan.")
+
+
+def _out_path(base: str | None, default_base: str, ext: str) -> str:
+    """Resolve an output path for a given extension."""
+    from pathlib import Path
+    if not base:
+        return f"{default_base}.{ext}"
+    path = Path(base)
+    return str(path if path.suffix.lower() == f".{ext}" else path.with_suffix(f".{ext}"))
+
+
+def _write_exports(cfg, hosts, timestamp, duration, console: "Console") -> None:
+    """Write JSON/CSV exports per --output / --out-file."""
+    from .output import csv_export, json_export
+    from .display.alerts import collect_alerts
+
+    default_base = f"scan_{timestamp:%Y%m%d_%H%M%S}"
+    target = ",".join(cfg.targets)
+
+    try:
+        if cfg.output in ("json", "both"):
+            report = json_export.build_report(
+                hosts, target=target, mode=cfg.mode, duration_secs=duration,
+                timestamp=timestamp, alerts=collect_alerts(hosts),
+            )
+            path = json_export.export_json(report, _out_path(cfg.out_file, default_base, "json"))
+            console.print(f"[green]Wrote JSON[/] -> {path}")
+        if cfg.output in ("csv", "both"):
+            path = csv_export.export_csv(hosts, _out_path(cfg.out_file, default_base, "csv"))
+            console.print(f"[green]Wrote CSV[/] -> {path}")
+    except OSError as exc:
+        console.print(f"[red]Export failed:[/] {exc}")
 
 
 def _annotate_oui(hosts) -> None:
