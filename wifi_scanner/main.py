@@ -328,10 +328,15 @@ def run_scan(cfg: ScanConfig, console: "Console") -> None:
                 hosts,
             ))
 
+    # Fingerprint + classify + score (turns signals into Type/OS/Model/Conf)
+    from .scanner import classifier
+    classifier.classify_hosts(hosts)
+
     randomized = sum(1 for h in hosts if "RANDOMIZED_MAC" in h.risk_flags)
     identified = sum(1 for h in hosts if h.vendor)
     with_ports = sum(1 for h in hosts if h.open_ports)
     named = sum(1 for h in hosts if h.hostname)
+    classified = sum(1 for h in hosts if h.device_type and h.device_type != "Unknown")
 
     console.print(build_host_table(hosts))
     if alerts:
@@ -344,6 +349,7 @@ def run_scan(cfg: ScanConfig, console: "Console") -> None:
         summary += f", {with_ports} with open ports"
     if named:
         summary += f", {named} named"
+    summary += f", {classified} classified"
     console.print(summary + ".")
 
 

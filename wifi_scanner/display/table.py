@@ -27,6 +27,18 @@ def _fmt_ports(ports: list[int]) -> Text:
     return Text(",".join(str(p) for p in ports))
 
 
+_CONF_STYLE = {
+    "CONFIRMED": "bold green", "HIGH": "green",
+    "MEDIUM": "yellow", "LOW": "dim", "UNKNOWN": "dim",
+}
+
+
+def _fmt_conf(confidence: int, label: str) -> Text:
+    if not confidence:
+        return Text(_DASH, style="dim")
+    return Text(f"{confidence}%", style=_CONF_STYLE.get(label, ""))
+
+
 def _row_style(flags: list[str]) -> str | None:
     """Red for high-severity flags, yellow for informational ones, else none."""
     if any(f in config.HIGH_RISK_FLAGS for f in flags):
@@ -57,6 +69,7 @@ def build_host_table(hosts: list[Host], title: str = "Discovered Hosts") -> Tabl
     table.add_column("Vendor")
     table.add_column("Type")
     table.add_column("Hostname")
+    table.add_column("OS")
     table.add_column("Ports")
     table.add_column("RTT ms", justify="right")
     table.add_column("TTL", justify="right")
@@ -74,10 +87,11 @@ def build_host_table(hosts: list[Host], title: str = "Discovered Hosts") -> Tabl
             Text(h.vendor) if h.vendor else Text(_DASH, style="dim"),
             Text(h.device_type) if h.device_type else Text(_DASH, style="dim"),
             Text(h.hostname) if h.hostname else Text(_DASH, style="dim"),
+            Text(h.os) if h.os else Text(_DASH, style="dim"),
             _fmt_ports(h.open_ports),
             _fmt_rtt(h.response_time_ms),
             str(h.ttl) if h.ttl is not None else _DASH,
-            f"{h.confidence}%" if h.confidence else _DASH,
+            _fmt_conf(h.confidence, h.confidence_label),
             _fmt_flags(h.risk_flags),
             style=row_style,
         )

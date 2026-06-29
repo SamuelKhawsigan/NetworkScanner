@@ -140,7 +140,7 @@ class TestTableRendering(unittest.TestCase):
         hosts = [Host(ip="10.8.50.1", mac="aa:bb:cc:dd:ee:01", response_time_ms=1.2)]
         table = build_host_table(hosts)
         self.assertEqual(table.row_count, 1)
-        self.assertEqual(len(table.columns), 10)
+        self.assertEqual(len(table.columns), 11)
 
     def test_host_table_flagged_row(self):
         h = Host(ip="10.8.50.9", mac="aa:bb:cc:dd:ee:09", risk_flags=["OPEN_TELNET"])

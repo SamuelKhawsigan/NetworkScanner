@@ -1,0 +1,100 @@
+{
+  "_comment": "Device fingerprint signatures. Each entry matches if ANY listed source contains ANY of its needles (case-insensitive substring). Sources: snmp_sysdescr, http, upnp, mdns, smb, netbios, banner, vendor. Optional fields: category, subcategory, os, vendor, model.",
+  "signatures": [
+    {
+      "name": "MikroTik RouterOS",
+      "match": {"snmp_sysdescr": "routeros", "http": ["routeros", "mikrotik"], "vendor": ["routerboard", "mikrotik"]},
+      "category": "Router", "subcategory": "MikroTik Router", "os": "RouterOS", "vendor": "MikroTik"
+    },
+    {
+      "name": "Cisco IOS",
+      "match": {"snmp_sysdescr": ["cisco ios", "cisco internetwork"], "http": "cisco", "vendor": "cisco systems"},
+      "category": "Switch", "subcategory": "Cisco IOS device", "os": "Cisco IOS", "vendor": "Cisco"
+    },
+    {
+      "name": "Ubiquiti UniFi",
+      "match": {"snmp_sysdescr": ["ubnt", "unifi"], "http": ["unifi", "ubiquiti"], "vendor": "ubiquiti"},
+      "category": "Access Point", "subcategory": "Ubiquiti UniFi", "vendor": "Ubiquiti"
+    },
+    {
+      "name": "QNAP NAS",
+      "match": {"http": ["qnap", "qts"], "smb": "qnap", "mdns": "_qnap", "vendor": "qnap"},
+      "category": "NAS", "subcategory": "QNAP NAS", "os": "QTS (Linux)", "vendor": "QNAP"
+    },
+    {
+      "name": "Synology NAS",
+      "match": {"http": ["synology", "diskstation"], "smb": "synology", "vendor": "synology"},
+      "category": "NAS", "subcategory": "Synology NAS", "os": "DSM (Linux)", "vendor": "Synology"
+    },
+    {
+      "name": "Hikvision Camera",
+      "match": {"http": "hikvision", "snmp_sysdescr": "hikvision", "vendor": "hikvision"},
+      "category": "Camera", "subcategory": "Hikvision IP Camera", "vendor": "Hikvision"
+    },
+    {
+      "name": "Dahua Camera",
+      "match": {"http": "dahua", "vendor": "dahua"},
+      "category": "Camera", "subcategory": "Dahua IP Camera", "vendor": "Dahua"
+    },
+    {
+      "name": "Axis Camera",
+      "match": {"http": "axis", "vendor": "axis communications"},
+      "category": "Camera", "subcategory": "Axis IP Camera", "vendor": "Axis"
+    },
+    {
+      "name": "HP Printer",
+      "match": {"snmp_sysdescr": ["jetdirect", "laserjet", "hp etherne"], "http": ["jetdirect", "laserjet"], "vendor": "hewlett"},
+      "category": "Printer", "subcategory": "HP Printer", "vendor": "HP"
+    },
+    {
+      "name": "Brother Printer",
+      "match": {"snmp_sysdescr": "brother", "http": "brother", "vendor": "brother"},
+      "category": "Printer", "subcategory": "Brother Printer", "vendor": "Brother"
+    },
+    {
+      "name": "Generic IPP/AirPrint Printer",
+      "match": {"mdns": ["_ipp", "_printer", "_pdl-datastream"]},
+      "category": "Printer", "subcategory": "Network Printer"
+    },
+    {
+      "name": "Apple TV / AirPlay",
+      "match": {"mdns": ["_airplay", "_raop", "_appletv"]},
+      "category": "Smart TV", "subcategory": "Apple TV / AirPlay", "vendor": "Apple", "os": "tvOS"
+    },
+    {
+      "name": "Google Chromecast",
+      "match": {"mdns": "_googlecast"},
+      "category": "Smart TV", "subcategory": "Chromecast", "vendor": "Google"
+    },
+    {
+      "name": "Sonos Speaker",
+      "match": {"mdns": "_sonos", "upnp": "sonos", "vendor": "sonos"},
+      "category": "IoT", "subcategory": "Sonos Speaker", "vendor": "Sonos"
+    },
+    {
+      "name": "Windows (IIS)",
+      "match": {"http": "microsoft-iis"},
+      "category": "Server", "subcategory": "Windows Server", "os": "Windows"
+    },
+    {
+      "name": "Windows (SNMP)",
+      "match": {"snmp_sysdescr": ["windows", "microsoft"]},
+      "os": "Windows"
+    },
+    {
+      "name": "Linux (SNMP)",
+      "match": {"snmp_sysdescr": "linux"},
+      "os": "Linux"
+    },
+    {
+      "name": "Ubuntu (SSH)",
+      "match": {"banner": "ubuntu"},
+      "os": "Linux (Ubuntu)"
+    },
+    {
+      "name": "Debian (SSH)",
+      "match": {"banner": "debian"},
+      "os": "Linux (Debian)"
+    }
+  ]
+}
