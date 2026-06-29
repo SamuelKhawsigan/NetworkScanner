@@ -224,12 +224,41 @@ def cli(target, mode, ports_profile, timeout, rate_pps, watch, interval, sort,
         print_plan(cfg, console)
         return
 
-    # Scan engines arrive in later checkpoints.
     print_plan(cfg, console)
-    console.print(
-        "\n[yellow]Scan engine not yet implemented[/] — this is the "
-        "Checkpoint 1 CLI skeleton. Use [bold]--dry-run[/] to preview the plan."
+    try:
+        run_scan(cfg, console)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted — stopping scan.[/]")
+
+
+def run_scan(cfg: ScanConfig, console: "Console") -> None:
+    """Execute a scan. Checkpoint 2: ARP discovery + table output.
+
+    Port scanning and fingerprinting land in later checkpoints; for now every
+    mode performs the ARP sweep and renders the discovered hosts.
+    """
+    from .scanner import arp
+    from .display.table import build_host_table, build_poison_panel
+
+    console.print(f"\n[cyan]ARP sweep[/] across {', '.join(cfg.targets)} …")
+    hosts, alerts = arp.arp_sweep(
+        cfg.targets,
+        timeout=cfg.timeout,
+        retries=config.DEFAULT_ARP_RETRIES,
+        rate_pps=cfg.rate_pps,
     )
+
+    if not hosts:
+        console.print(
+            "[yellow]No hosts answered.[/] On WSL2 this usually means "
+            "mirrored networking isn't active — see the note above."
+        )
+        return
+
+    console.print(build_host_table(hosts))
+    if alerts:
+        console.print(build_poison_panel(alerts))
+    console.print(f"\n[green]{len(hosts)} host(s) discovered.[/]")
 
 
 def print_plan(cfg: ScanConfig, console: "Console") -> None:
