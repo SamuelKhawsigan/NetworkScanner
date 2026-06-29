@@ -160,8 +160,12 @@ async def scan_targets(
     rate_pps: int = 0,
     open_conn=None,
     do_banner: bool = True,
+    progress_cb=None,
 ) -> dict[str, list[PortResult]]:
-    """Scan every (host, port) pair under shared concurrency + rate limits."""
+    """Scan every (host, port) pair under shared concurrency + rate limits.
+
+    `progress_cb()` is invoked once per completed (host, port) probe.
+    """
     semaphore = asyncio.Semaphore(concurrency)
     limiter = RateLimiter(rate_pps)
     results: dict[str, list[PortResult]] = {h.ip: [] for h in hosts}
@@ -174,6 +178,8 @@ async def scan_targets(
             )
         if result:
             results[ip].append(result)
+        if progress_cb:
+            progress_cb()
 
     await asyncio.gather(
         *(one(h.ip, port) for h in hosts for port in ports)
@@ -191,13 +197,14 @@ def scan_and_annotate(
     rate_pps: int = 0,
     open_conn=None,
     do_banner: bool = True,
+    progress_cb=None,
 ) -> dict[str, list[PortResult]]:
     """Run the scan and write open_ports/services/risk-flags back onto hosts."""
     results = asyncio.run(
         scan_targets(
             hosts, ports, timeout=timeout, read_timeout=read_timeout,
             concurrency=concurrency, rate_pps=rate_pps, open_conn=open_conn,
-            do_banner=do_banner,
+            do_banner=do_banner, progress_cb=progress_cb,
         )
     )
     for host in hosts:

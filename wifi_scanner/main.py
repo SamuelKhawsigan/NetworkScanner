@@ -47,6 +47,7 @@ class ScanConfig:
     verbose: bool
     debug: bool
     dry_run: bool
+    no_live: bool = False
     hosts_total: int = field(default=0)
 
 
@@ -184,11 +185,12 @@ def apply_mode_overrides(cfg: ScanConfig) -> ScanConfig:
 @click.option("--verbose", is_flag=True, help="Verbose logging.")
 @click.option("--debug", is_flag=True, help="Debug output.")
 @click.option("--update-oui", is_flag=True, help="(Re)build the local OUI vendor DB, then scan.")
+@click.option("--no-live", is_flag=True, help="Disable the live dashboard; print a static report.")
 @click.option("--dry-run", is_flag=True, help="Show the scan plan without sending packets.")
 @click.version_option(__version__, "-V", "--version", prog_name="wifi-scanner")
 def cli(target, mode, ports_profile, timeout, rate_pps, watch, interval, sort,
         filter_expr, output, out_file, no_ports, no_snmp, stealth, known_file,
-        history_db, verbose, debug, update_oui, dry_run):
+        history_db, verbose, debug, update_oui, no_live, dry_run):
     """Office WiFi/LAN scanner — authorized network reconnaissance."""
     from rich.console import Console
     console = Console()
@@ -215,6 +217,7 @@ def cli(target, mode, ports_profile, timeout, rate_pps, watch, interval, sort,
         verbose=verbose,
         debug=debug,
         dry_run=dry_run,
+        no_live=no_live,
     )
     cfg = apply_mode_overrides(cfg)
     cfg.hosts_total = count_hosts(cfg.targets)
@@ -257,33 +260,55 @@ def ensure_oui_db(console: "Console", force: bool = False) -> bool:
 
 
 def run_scan(cfg: ScanConfig, console: "Console") -> None:
-    """Execute a scan. Checkpoints 2-3: ARP discovery, OUI vendor lookup,
-    randomized-MAC flagging, and table output.
+    """Execute one full scan pass and render the results.
 
-    Port scanning and fingerprinting land in later checkpoints.
+    Drives a reporter (live dashboard or static fallback) through the pipeline:
+    ARP discovery -> OUI -> port scan -> protocol probing -> classify, then
+    prints the final report (table, ARP conflicts, alerts, summary).
     """
     from .scanner import arp
-    from .scanner.oui import OuiLookup
-    from .display.table import build_host_table, build_poison_panel
+    from .display.live_view import LiveDashboard, StaticReporter
 
+    # OUI DB build prints to console, so do it before any live display starts.
     ensure_oui_db(console)
 
-    console.print(f"\n[cyan]ARP sweep[/] across {', '.join(cfg.targets)} …")
-    hosts, alerts = arp.arp_sweep(
-        cfg.targets,
-        timeout=cfg.timeout,
-        retries=config.DEFAULT_ARP_RETRIES,
-        rate_pps=cfg.rate_pps,
-    )
+    use_live = console.is_terminal and not cfg.no_live
+    reporter = (LiveDashboard(cfg, console) if use_live
+                else StaticReporter(cfg, console))
 
-    if not hosts:
-        console.print(
-            "[yellow]No hosts answered.[/] On WSL2 this usually means "
-            "mirrored networking isn't active — see the note above."
+    with reporter:
+        reporter.phase(f"ARP sweep — {', '.join(cfg.targets)}", "arp")
+        hosts, poison = arp.arp_sweep(
+            cfg.targets,
+            timeout=cfg.timeout,
+            retries=config.DEFAULT_ARP_RETRIES,
+            rate_pps=cfg.rate_pps,
         )
-        return
+        reporter.finish("arp")
+        reporter.set_hosts(hosts)
 
-    # Vendor resolution + randomized-MAC flagging
+        if not hosts:
+            console.print(
+                "[yellow]No hosts answered.[/] On WSL2 this usually means "
+                "mirrored networking isn't active — see the note above."
+            )
+            return
+
+        _annotate_oui(hosts)
+        _run_port_scan(cfg, hosts, reporter)
+        _run_protocols(cfg, hosts, reporter)
+
+        from .scanner import classifier
+        reporter.phase("Classifying", "classify", len(hosts))
+        classifier.classify_hosts(hosts)
+        reporter.finish("classify")
+        reporter.set_hosts(hosts)
+
+    _print_final_report(cfg, hosts, poison, console)
+
+
+def _annotate_oui(hosts) -> None:
+    from .scanner.oui import OuiLookup
     lookup = OuiLookup()
     try:
         for host in hosts:
@@ -291,66 +316,69 @@ def run_scan(cfg: ScanConfig, console: "Console") -> None:
     finally:
         lookup.close()
 
-    # Port scan + banner grabbing (full mode; skipped by --no-ports / quick)
-    if not cfg.no_ports:
-        from .scanner import port_scan
 
-        do_banner = not cfg.stealth
-        console.print(
-            f"[cyan]Port scan[/] — {len(cfg.ports)} ports/host "
-            f"({cfg.ports_profile} profile)"
-            + ("" if do_banner else ", banners disabled (stealth)") + " …"
-        )
-        port_scan.scan_and_annotate(
-            hosts, cfg.ports,
-            concurrency=config.PORT_SCAN_CONCURRENCY,
-            rate_pps=cfg.rate_pps,
-            do_banner=do_banner,
-        )
+def _run_port_scan(cfg, hosts, reporter) -> None:
+    if cfg.no_ports:
+        return
+    from .scanner import port_scan
+    reporter.phase(f"Port scan — {cfg.ports_profile} profile", "ports",
+                   len(hosts) * len(cfg.ports))
+    port_scan.scan_and_annotate(
+        hosts, cfg.ports,
+        concurrency=config.PORT_SCAN_CONCURRENCY,
+        rate_pps=cfg.rate_pps,
+        do_banner=not cfg.stealth,
+        progress_cb=lambda: reporter.advance("ports"),
+    )
+    reporter.finish("ports")
+    reporter.set_hosts(hosts)
 
-    # Protocol probing (full mode): SNMP/NetBIOS/mDNS/UPnP/SMB/HTTP.
+
+def _run_protocols(cfg, hosts, reporter) -> None:
     # Skipped in quick (ARP+OUI only) and stealth (no active probing).
-    if cfg.mode != "quick" and not cfg.stealth:
-        from concurrent.futures import ThreadPoolExecutor
-        from .scanner import protocols
+    if cfg.mode == "quick" or cfg.stealth:
+        return
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from .scanner import protocols
 
-        console.print(
-            "[cyan]Protocol probing[/] — SNMP"
-            + ("(skipped)" if cfg.no_snmp else "")
-            + ", NetBIOS, mDNS, UPnP, SMB, HTTP …"
-        )
-        workers = min(50, max(4, len(hosts)))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            list(pool.map(
-                lambda h: protocols.probe_host(
-                    h, do_snmp=not cfg.no_snmp, timeout=float(cfg.timeout)
-                ),
-                hosts,
-            ))
+    reporter.phase("Fingerprinting — SNMP/NetBIOS/mDNS/UPnP/SMB/HTTP",
+                   "probe", len(hosts))
+    workers = min(50, max(4, len(hosts)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [
+            pool.submit(protocols.probe_host, h,
+                        do_snmp=not cfg.no_snmp, timeout=float(cfg.timeout))
+            for h in hosts
+        ]
+        for _ in as_completed(futures):
+            reporter.advance("probe")
+    reporter.finish("probe")
+    reporter.set_hosts(hosts)
 
-    # Fingerprint + classify + score (turns signals into Type/OS/Model/Conf)
-    from .scanner import classifier
-    classifier.classify_hosts(hosts)
 
-    randomized = sum(1 for h in hosts if "RANDOMIZED_MAC" in h.risk_flags)
+def _print_final_report(cfg, hosts, poison, console: "Console") -> None:
+    from .display.table import (build_host_table, build_poison_panel,
+                                build_summary, filter_hosts, sort_hosts)
+    from .display.alerts import build_alerts_panel, collect_alerts
+
+    view = filter_hosts(hosts, cfg.filters) if cfg.filters else hosts
+    view = sort_hosts(view, cfg.sort or "ip")
+
+    console.print(build_host_table(view))
+    if poison:
+        console.print(build_poison_panel(poison))
+    console.print(build_alerts_panel(collect_alerts(hosts)))
+    console.print(build_summary(hosts))
+
     identified = sum(1 for h in hosts if h.vendor)
-    with_ports = sum(1 for h in hosts if h.open_ports)
+    randomized = sum(1 for h in hosts if "RANDOMIZED_MAC" in h.risk_flags)
     named = sum(1 for h in hosts if h.hostname)
     classified = sum(1 for h in hosts if h.device_type and h.device_type != "Unknown")
-
-    console.print(build_host_table(hosts))
-    if alerts:
-        console.print(build_poison_panel(alerts))
-    summary = (
-        f"\n[green]{len(hosts)} host(s) discovered[/] — "
-        f"{identified} vendor-identified, {randomized} randomized MAC(s)"
-    )
-    if not cfg.no_ports:
-        summary += f", {with_ports} with open ports"
-    if named:
-        summary += f", {named} named"
-    summary += f", {classified} classified"
-    console.print(summary + ".")
+    line = (f"[green]{len(hosts)} host(s)[/] — {identified} vendor-identified, "
+            f"{randomized} randomized, {named} named, {classified} classified")
+    if cfg.filters:
+        line += f"  ([yellow]{len(view)}[/] shown after filter)"
+    console.print(line + ".")
 
 
 def print_plan(cfg: ScanConfig, console: "Console") -> None:

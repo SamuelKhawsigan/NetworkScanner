@@ -7,7 +7,10 @@ checkpoints populate them.
 
 from __future__ import annotations
 
+import ipaddress
+
 from rich import box
+from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
@@ -55,8 +58,13 @@ def _fmt_flags(flags: list[str]) -> Text:
     return Text(" ".join(flags), style="bold red" if high else "yellow")
 
 
-def build_host_table(hosts: list[Host], title: str = "Discovered Hosts") -> Table:
-    """Render discovered hosts as a rich Table."""
+def build_host_table(hosts: list[Host], title: str = "Discovered Hosts",
+                     max_rows: int | None = None) -> Table:
+    """Render discovered hosts as a rich Table.
+
+    If `max_rows` is set and exceeded, only the first `max_rows` are shown and a
+    caption notes how many were hidden (used by the cropped live preview).
+    """
     table = Table(
         title=title,
         title_style="bold cyan",
@@ -76,7 +84,8 @@ def build_host_table(hosts: list[Host], title: str = "Discovered Hosts") -> Tabl
     table.add_column("Conf", justify="right")
     table.add_column("Flags")
 
-    for h in hosts:
+    shown = hosts[:max_rows] if max_rows is not None else hosts
+    for h in shown:
         row_style = _row_style(h.risk_flags)
         # Device-derived strings (mac/vendor/hostname/type) are wrapped in Text
         # so rich never interprets markup or emoji shortcodes inside them — a
@@ -95,7 +104,79 @@ def build_host_table(hosts: list[Host], title: str = "Discovered Hosts") -> Tabl
             _fmt_flags(h.risk_flags),
             style=row_style,
         )
+    if max_rows is not None and len(hosts) > max_rows:
+        table.caption = f"… and {len(hosts) - max_rows} more"
+        table.caption_style = "dim"
     return table
+
+
+# --------------------------------------------------------------------------- #
+# Sorting / filtering / summary
+# --------------------------------------------------------------------------- #
+def _ip_key(ip: str):
+    try:
+        return (0, int(ipaddress.ip_address(ip)))
+    except ValueError:
+        return (1, ip)
+
+
+def _flag_severity(flags: list[str]) -> int:
+    high = sum(1 for f in flags if f in config.HIGH_RISK_FLAGS)
+    return high * 100 + len(flags)
+
+
+def sort_hosts(hosts: list[Host], key: str = "ip") -> list[Host]:
+    """Return hosts sorted by one of: ip, mac, type, conf, flags."""
+    if key == "mac":
+        return sorted(hosts, key=lambda h: h.mac)
+    if key == "type":
+        return sorted(hosts, key=lambda h: (h.device_type or "zzz", _ip_key(h.ip)))
+    if key == "conf":
+        return sorted(hosts, key=lambda h: (-h.confidence, _ip_key(h.ip)))
+    if key == "flags":
+        return sorted(hosts, key=lambda h: (-_flag_severity(h.risk_flags), _ip_key(h.ip)))
+    return sorted(hosts, key=lambda h: _ip_key(h.ip))
+
+
+def _match_filter(host: Host, key: str, value: str) -> bool:
+    vl = value.lower()
+    if key == "type":
+        return vl in (host.device_type or "").lower() or vl in (host.device_subtype or "").lower()
+    if key == "flags":
+        return any(vl == f.lower() for f in host.risk_flags)
+    if key == "vendor":
+        return vl in (host.vendor or "").lower()
+    if key == "os":
+        return vl in (host.os or "").lower()
+    if key == "hostname":
+        return vl in (host.hostname or "").lower()
+    if key == "ip":
+        return value in host.ip
+    return True
+
+
+def filter_hosts(hosts: list[Host], filters: dict[str, str]) -> list[Host]:
+    """Keep hosts matching every filter clause (AND semantics)."""
+    result = hosts
+    for key, value in filters.items():
+        result = [h for h in result if _match_filter(h, key, value)]
+    return result
+
+
+def build_summary(hosts: list[Host]) -> Panel:
+    """One-line counts by device type plus a flagged total."""
+    by_type: dict[str, int] = {}
+    for h in hosts:
+        by_type[h.device_type or "Unknown"] = by_type.get(h.device_type or "Unknown", 0) + 1
+    flagged = sum(
+        1 for h in hosts if any(f in config.HIGH_RISK_FLAGS for f in h.risk_flags)
+    )
+    parts = "   ".join(
+        f"{t}: {c}" for t, c in sorted(by_type.items(), key=lambda x: -x[1])
+    )
+    text = Text(parts or "no hosts")
+    text.append(f"      Flagged: {flagged}", style="bold red" if flagged else "dim")
+    return Panel(text, title="Summary", border_style="cyan", expand=False)
 
 
 def build_poison_panel(alerts: list[PoisonAlert]) -> Table:
