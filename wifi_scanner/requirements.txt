@@ -1,0 +1,6 @@
+scapy>=2.5.0
+rich>=13.7.0
+click>=8.1.0
+aiohttp>=3.9.0
+# python-nmap is an optional fallback only; uncomment if you want nmap support
+# python-nmap>=0.7.1

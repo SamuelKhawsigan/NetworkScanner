@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Scanner runtime artifacts
+wifi_scanner/data/oui.db
+wifi_scanner/data/history.db
+*.log
+scan_*.json
+scan_*.csv
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Claude Code local settings
+.claude/settings.local.json
