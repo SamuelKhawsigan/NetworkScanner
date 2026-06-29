@@ -12,6 +12,10 @@ wifi_scanner/data/history.db
 *.log
 scan_*.json
 scan_*.csv
+# Scan exports (anywhere in the tree) — keep data/*.json (signatures) tracked
+/wifi_scanner/*.json
+/wifi_scanner/*.csv
+office_scan.*
 
 # OS / editor
 .DS_Store
