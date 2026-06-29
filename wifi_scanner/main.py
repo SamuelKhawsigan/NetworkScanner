@@ -291,16 +291,37 @@ def run_scan(cfg: ScanConfig, console: "Console") -> None:
     finally:
         lookup.close()
 
+    # Port scan + banner grabbing (full mode; skipped by --no-ports / quick)
+    if not cfg.no_ports:
+        from .scanner import port_scan
+
+        do_banner = not cfg.stealth
+        console.print(
+            f"[cyan]Port scan[/] — {len(cfg.ports)} ports/host "
+            f"({cfg.ports_profile} profile)"
+            + ("" if do_banner else ", banners disabled (stealth)") + " …"
+        )
+        port_scan.scan_and_annotate(
+            hosts, cfg.ports,
+            concurrency=config.PORT_SCAN_CONCURRENCY,
+            rate_pps=cfg.rate_pps,
+            do_banner=do_banner,
+        )
+
     randomized = sum(1 for h in hosts if "RANDOMIZED_MAC" in h.risk_flags)
     identified = sum(1 for h in hosts if h.vendor)
+    with_ports = sum(1 for h in hosts if h.open_ports)
 
     console.print(build_host_table(hosts))
     if alerts:
         console.print(build_poison_panel(alerts))
-    console.print(
+    summary = (
         f"\n[green]{len(hosts)} host(s) discovered[/] — "
-        f"{identified} vendor-identified, {randomized} randomized MAC(s)."
+        f"{identified} vendor-identified, {randomized} randomized MAC(s)"
     )
+    if not cfg.no_ports:
+        summary += f", {with_ports} with open ports"
+    console.print(summary + ".")
 
 
 def print_plan(cfg: ScanConfig, console: "Console") -> None:

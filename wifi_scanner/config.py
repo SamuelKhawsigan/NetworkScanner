@@ -60,8 +60,24 @@ DEFAULT_PORT_PROFILE = "common"
 
 # Concurrency / timeouts for the port scanner
 PORT_SCAN_TIMEOUT = 1.0                   # seconds per TCP connect attempt
-PORT_SCAN_CONCURRENCY = 100               # max simultaneous connections
+PORT_SCAN_READ_TIMEOUT = 1.5              # seconds to wait for a banner
+PORT_SCAN_CONCURRENCY = 200               # max simultaneous connections
 BANNER_BYTES = 256                        # bytes to read for banner grabbing
+
+# Ports where the server stays silent until spoken to — send an HTTP probe.
+HTTP_PROBE_PORTS = {80, 8080, 8000, 8008, 8081, 8088, 8888, 8009, 3000, 5000, 7547}
+
+# Well-known port -> short service name (banner-less fallback labelling).
+WELL_KNOWN_PORTS = {
+    21: "ftp", 22: "ssh", 23: "telnet", 25: "smtp", 53: "dns", 80: "http",
+    110: "pop3", 135: "msrpc", 139: "netbios-ssn", 143: "imap", 161: "snmp",
+    389: "ldap", 443: "https", 445: "smb", 515: "printer", 548: "afp",
+    554: "rtsp", 587: "smtp", 631: "ipp", 993: "imaps", 995: "pop3s",
+    1883: "mqtt", 2049: "nfs", 3306: "mysql", 3389: "rdp", 5353: "mdns",
+    5900: "vnc", 6379: "redis", 8080: "http-alt", 8443: "https-alt",
+    8888: "http-alt", 9100: "jetdirect", 9200: "elasticsearch",
+    27017: "mongodb", 37777: "dahua-dvr",
+}
 
 # --------------------------------------------------------------------------- #
 # Fingerprinting
