@@ -304,7 +304,33 @@ def run_scan(cfg: ScanConfig, console: "Console") -> None:
         reporter.finish("classify")
         reporter.set_hosts(hosts)
 
+    events = _record_history(cfg, hosts, console)
     _print_final_report(cfg, hosts, poison, console)
+    _report_history(events, console)
+
+
+def _record_history(cfg, hosts, console: "Console"):
+    """Diff against history.db and apply NEW_DEVICE/IP_CHANGED/MAC_CHANGED flags."""
+    from .scanner.history import HistoryDB
+    try:
+        hist = HistoryDB(cfg.history_db)
+    except Exception as exc:               # don't let history break a scan
+        console.print(f"[yellow]History tracking unavailable ({exc}).[/]")
+        return []
+    try:
+        return hist.record_scan(hosts)
+    finally:
+        hist.close()
+
+
+def _report_history(events, console: "Console") -> None:
+    if not events:
+        return
+    counts: dict[str, int] = {}
+    for ev in events:
+        counts[ev.event_type] = counts.get(ev.event_type, 0) + 1
+    parts = ", ".join(f"{n} {t}" for t, n in sorted(counts.items()))
+    console.print(f"[cyan]History:[/] {parts} since last scan.")
 
 
 def _annotate_oui(hosts) -> None:
