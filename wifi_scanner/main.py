@@ -260,63 +260,125 @@ def ensure_oui_db(console: "Console", force: bool = False) -> bool:
 
 
 def run_scan(cfg: ScanConfig, console: "Console") -> None:
-    """Execute one full scan pass and render the results.
+    """Dispatch to a single scan or the continuous watch loop."""
+    ensure_oui_db(console)            # prints; do it before any live display
+    if cfg.watch:
+        run_watch(cfg, console)
+    else:
+        run_single(cfg, console)
 
-    Drives a reporter (live dashboard or static fallback) through the pipeline:
-    ARP discovery -> OUI -> port scan -> protocol probing -> classify, then
-    prints the final report (table, ARP conflicts, alerts, summary).
-    """
+
+def _run_pipeline(cfg: ScanConfig, reporter, console: "Console"):
+    """One full scan pass driving `reporter`: ARP -> OUI -> ports -> probe ->
+    classify. Returns (hosts, poison_alerts)."""
+    from .scanner import arp, classifier
+
+    reporter.phase(f"ARP sweep — {', '.join(cfg.targets)}", "arp")
+    hosts, poison = arp.arp_sweep(
+        cfg.targets, timeout=cfg.timeout,
+        retries=config.DEFAULT_ARP_RETRIES, rate_pps=cfg.rate_pps,
+    )
+    reporter.finish("arp")
+    reporter.set_hosts(hosts)
+    if not hosts:
+        return hosts, poison
+
+    _annotate_oui(hosts)
+    _run_port_scan(cfg, hosts, reporter)
+    _run_protocols(cfg, hosts, reporter)
+
+    reporter.phase("Classifying", "classify", len(hosts))
+    classifier.classify_hosts(hosts)
+    reporter.finish("classify")
+    reporter.set_hosts(hosts)
+    return hosts, poison
+
+
+def run_single(cfg: ScanConfig, console: "Console") -> None:
+    """One scan pass with a transient dashboard, then the final report."""
     import time
     from datetime import datetime, timezone
-
-    from .scanner import arp
     from .display.live_view import LiveDashboard, StaticReporter
 
-    scan_started = time.monotonic()
-    scan_timestamp = datetime.now(timezone.utc)
-
-    # OUI DB build prints to console, so do it before any live display starts.
-    ensure_oui_db(console)
+    started = time.monotonic()
+    timestamp = datetime.now(timezone.utc)
 
     use_live = console.is_terminal and not cfg.no_live
     reporter = (LiveDashboard(cfg, console) if use_live
                 else StaticReporter(cfg, console))
 
     with reporter:
-        reporter.phase(f"ARP sweep — {', '.join(cfg.targets)}", "arp")
-        hosts, poison = arp.arp_sweep(
-            cfg.targets,
-            timeout=cfg.timeout,
-            retries=config.DEFAULT_ARP_RETRIES,
-            rate_pps=cfg.rate_pps,
+        hosts, poison = _run_pipeline(cfg, reporter, console)
+
+    if not hosts:
+        console.print(
+            "[yellow]No hosts answered.[/] On WSL2 this usually means "
+            "mirrored networking isn't active — see the note above."
         )
-        reporter.finish("arp")
-        reporter.set_hosts(hosts)
-
-        if not hosts:
-            console.print(
-                "[yellow]No hosts answered.[/] On WSL2 this usually means "
-                "mirrored networking isn't active — see the note above."
-            )
-            return
-
-        _annotate_oui(hosts)
-        _run_port_scan(cfg, hosts, reporter)
-        _run_protocols(cfg, hosts, reporter)
-
-        from .scanner import classifier
-        reporter.phase("Classifying", "classify", len(hosts))
-        classifier.classify_hosts(hosts)
-        reporter.finish("classify")
-        reporter.set_hosts(hosts)
+        return
 
     events = _record_history(cfg, hosts, console)
     _print_final_report(cfg, hosts, poison, console)
     _report_history(events, console)
 
     if cfg.output:
-        _write_exports(cfg, hosts, scan_timestamp,
-                       time.monotonic() - scan_started, console)
+        _write_exports(cfg, hosts, timestamp, time.monotonic() - started, console)
+
+
+def run_watch(cfg: ScanConfig, console: "Console") -> None:
+    """Continuous re-scanning with a persistent dashboard until Ctrl+C.
+
+    Each pass diffs against history.db so new/changed devices surface as alerts
+    in real time. On exit, prints the final report and exports if requested.
+    """
+    import time
+    from datetime import datetime, timezone
+    from rich.console import Console as RichConsole
+    from .display.live_view import LiveDashboard, StaticReporter
+
+    started = time.monotonic()
+    timestamp = datetime.now(timezone.utc)
+    quiet = RichConsole(quiet=True)          # swallow history prints during live
+
+    console.print(
+        f"[cyan]Watch mode[/] — re-scanning every {cfg.interval}s. "
+        "Press Ctrl+C to stop."
+    )
+    use_live = console.is_terminal and not cfg.no_live
+    dashboard = (LiveDashboard(cfg, console, transient=False) if use_live
+                 else StaticReporter(cfg, console))
+
+    hosts: list = []
+    poison: list = []
+    try:
+        with dashboard:
+            scan_num = 0
+            while True:
+                scan_num += 1
+                if hasattr(dashboard, "begin_scan"):
+                    dashboard.begin_scan(scan_num)
+                hosts, poison = _run_pipeline(cfg, dashboard, console)
+                if hosts:
+                    _record_history(cfg, hosts, quiet)
+                    dashboard.set_hosts(hosts)
+                _watch_wait(dashboard, cfg.interval)
+    except KeyboardInterrupt:
+        pass
+
+    console.print("\n[yellow]Watch stopped.[/]")
+    if hosts:
+        _print_final_report(cfg, hosts, poison, console)
+        if cfg.output:
+            _write_exports(cfg, hosts, timestamp, time.monotonic() - started, console)
+
+
+def _watch_wait(dashboard, interval: int) -> None:
+    """Sleep `interval` seconds, updating the countdown each second."""
+    import time
+    for remaining in range(interval, 0, -1):
+        if hasattr(dashboard, "set_status"):
+            dashboard.set_status(f"WAITING {remaining}s")
+        time.sleep(1)
 
 
 def _record_history(cfg, hosts, console: "Console"):

@@ -52,24 +52,31 @@ class StaticReporter:
 class LiveDashboard:
     """Full-screen live dashboard driven by the scan pipeline."""
 
-    def __init__(self, cfg, console: Console, max_device_rows: int = 16):
+    def __init__(self, cfg, console: Console, max_device_rows: int = 16,
+                 transient: bool = True):
         self.cfg = cfg
         self.console = console
         self.max_device_rows = max_device_rows
         self.hosts: list = []
         self.phase_name = "Initializing"
+        self.status = "SCANNING"
+        self.scan_count = 0
         self.start = time.monotonic()
         self._last = 0.0
         self._tasks: dict[str, int] = {}
-        self.progress = Progress(
+        self.progress = self._new_progress()
+        self.live = Live(self._render(), console=console, refresh_per_second=6,
+                         transient=transient)
+
+    @staticmethod
+    def _new_progress() -> Progress:
+        return Progress(
             SpinnerColumn(),
             TextColumn("[bold]{task.description}"),
             BarColumn(bar_width=30),
             TextColumn("{task.completed}/{task.total}"),
             expand=False,
         )
-        self.live = Live(self._render(), console=console, refresh_per_second=6,
-                         transient=True)
 
     # -- lifecycle -------------------------------------------------------- #
     def __enter__(self):
@@ -78,6 +85,19 @@ class LiveDashboard:
 
     def __exit__(self, *exc):
         return self.live.__exit__(*exc)
+
+    # -- watch-mode controls --------------------------------------------- #
+    def begin_scan(self, scan_num: int) -> None:
+        """Start a fresh pass: reset progress bars, bump the scan counter."""
+        self.scan_count = scan_num
+        self.status = "SCANNING"
+        self.progress = self._new_progress()
+        self._tasks = {}
+        self._update(force=True)
+
+    def set_status(self, text: str) -> None:
+        self.status = text
+        self._update(force=True)
 
     # -- pipeline interface ---------------------------------------------- #
     def phase(self, name: str, key: str | None = None, total: int = 1) -> None:
@@ -112,11 +132,13 @@ class LiveDashboard:
     def _header(self) -> Panel:
         elapsed = int(time.monotonic() - self.start)
         mm, ss = divmod(elapsed, 60)
+        waiting = self.status.startswith("WAITING")
         title = Text("OFFICE NETWORK SCANNER", style="bold cyan")
         title.append(f"   │   {', '.join(self.cfg.targets)}   │   ", style="white")
-        title.append("SCANNING", style="bold yellow")
+        title.append(self.status, style="bold green" if waiting else "bold yellow")
+        scan_tag = f"Scan #{self.scan_count}    " if self.scan_count else ""
         line2 = Text(
-            f"Hosts: {len(self.hosts)}    Elapsed: {mm:d}m{ss:02d}s    "
+            f"{scan_tag}Hosts: {len(self.hosts)}    Elapsed: {mm:d}m{ss:02d}s    "
             f"Phase: {self.phase_name}",
             style="dim",
         )
