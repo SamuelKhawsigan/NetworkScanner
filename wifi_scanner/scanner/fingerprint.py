@@ -52,9 +52,11 @@ PORT_CATEGORY = {
     1883: "IoT", 5683: "IoT",
 }
 
+# Note: _airplay/_raop are intentionally NOT mapped to Smart TV here — Macs
+# advertise them as AirPlay receivers too. Genuine Apple TVs are caught by the
+# signature DB, and Mac computers are reclassified in _apple_mac_evidence().
 MDNS_CATEGORY = [
     ("_ipp", "Printer"), ("_printer", "Printer"), ("_pdl-datastream", "Printer"),
-    ("_airplay", "Smart TV"), ("_raop", "Smart TV"), ("_appletv", "Smart TV"),
     ("_googlecast", "Smart TV"), ("_spotify-connect", "Smart TV"),
     ("_sonos", "IoT"), ("_homekit", "IoT"), ("_hap", "IoT"),
 ]
@@ -158,10 +160,21 @@ def _heuristic_evidence(host: Host) -> list[Evidence]:
     if 445 in ports and 548 in ports:
         evidence.append(Evidence("port_profile", SRC_WEIGHT["port_profile"],
                                  category="NAS", detail="smb+afp"))
-    if 3389 in ports:
-        evidence.append(Evidence("port_profile", SRC_WEIGHT["port_profile"],
-                                 category="Workstation", subcategory="Windows Workstation",
-                                 os="Windows", detail="rdp"))
+    # Windows workstation: SMB/NetBIOS identity or the classic 445(+139/3389)
+    # client surface. Weight follows the strongest available signal so a named
+    # Windows box scores like a real identification, not a lone port hint.
+    has_smb = "smb" in host.signals
+    has_nb = "netbios" in host.signals
+    if 445 in ports or 3389 in ports or has_smb or has_nb:
+        if has_smb:
+            source, weight = "smb", SRC_WEIGHT["smb"]
+        elif has_nb:
+            source, weight = "netbios", SRC_WEIGHT["netbios"]
+        else:
+            source, weight = "port_profile", SRC_WEIGHT["port_profile"]
+        evidence.append(Evidence(source, weight, category="Workstation",
+                                 subcategory="Windows Workstation", os="Windows",
+                                 detail="windows client"))
 
     mdns = host.signals.get("mdns")
     if mdns:
@@ -197,6 +210,30 @@ def _heuristic_evidence(host: Host) -> list[Evidence]:
     return evidence
 
 
+def _apple_mac_evidence(host: Host) -> Evidence | None:
+    """Detect Apple *computers* (vs Apple TVs) so AirPlay doesn't make them TVs.
+
+    Returns strong Laptop/Workstation evidence when the hostname (or Apple
+    vendor + generic Mac name) identifies a Mac; otherwise None.
+    """
+    host_l = (host.hostname or "").lower()
+    is_apple = "apple" in (host.vendor or "").lower()
+
+    if any(k in host_l for k in ("macbook", "mbp", "macair")):
+        kind = ("Laptop", "MacBook (macOS)")
+    elif any(k in host_l for k in ("imac", "mac mini", "macmini",
+                                   "mac pro", "macpro", "mac studio")):
+        kind = ("Workstation", "Mac (macOS)")
+    elif is_apple and (host_l.startswith("mac-") or host_l == "mac"):
+        kind = ("Laptop", "Mac (macOS)")
+    else:
+        return None
+
+    return Evidence("mdns", SRC_WEIGHT["mdns"] + 2, category=kind[0],
+                    subcategory=kind[1], os="macOS", vendor="Apple",
+                    detail="apple computer")
+
+
 def gather_evidence(host: Host, signatures: list[dict] | None = None) -> list[Evidence]:
     """Produce the full weighted evidence list for a host."""
     signatures = signatures if signatures is not None else load_signatures()
@@ -219,6 +256,13 @@ def gather_evidence(host: Host, signatures: list[dict] | None = None) -> list[Ev
             ))
 
     evidence.extend(_heuristic_evidence(host))
+
+    # An Apple computer overrides any Smart TV evidence its AirPlay services
+    # would otherwise produce (e.g. a MacBook advertising _airplay/_raop).
+    mac_ev = _apple_mac_evidence(host)
+    if mac_ev:
+        evidence = [e for e in evidence if e.category != "Smart TV"]
+        evidence.append(mac_ev)
     return evidence
 
 

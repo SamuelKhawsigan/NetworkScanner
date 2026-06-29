@@ -70,6 +70,43 @@ class TestClassifyRealDevices(unittest.TestCase):
         self.assertEqual(host.confidence_label, "UNKNOWN")
 
 
+class TestClassificationFixes(unittest.TestCase):
+    """Regressions for accuracy bugs found in live scans."""
+
+    def test_macbook_airplay_is_laptop_not_smart_tv(self):
+        host = host_with(ip="10.8.50.55", mac="aa:bb:cc:00:00:55",
+                         vendor="Apple", hostname="MACBOOKPRO-51FF")
+        host.signals["mdns"] = MdnsInfo(
+            services=["_airplay._tcp.local", "_raop._tcp.local"])
+        classifier.classify_host(host)
+        self.assertEqual(host.device_type, "Laptop")
+        self.assertEqual(host.os, "macOS")
+        self.assertNotEqual(host.device_type, "Smart TV")
+
+    def test_imac_is_workstation(self):
+        host = host_with(vendor="Apple", hostname="iMac-Reception")
+        host.signals["mdns"] = MdnsInfo(services=["_airplay._tcp.local"])
+        classifier.classify_host(host)
+        self.assertEqual(host.device_type, "Workstation")
+
+    def test_real_apple_tv_stays_smart_tv(self):
+        # No computer-like hostname -> AirPlay signature keeps it a Smart TV.
+        host = host_with(vendor="Apple", hostname="Living-Room")
+        host.signals["mdns"] = MdnsInfo(services=["_airplay._tcp.local"])
+        classifier.classify_host(host)
+        self.assertEqual(host.device_type, "Smart TV")
+
+    def test_windows_workstation_confidence_boosted(self):
+        host = host_with(ip="10.8.50.60", mac="aa:bb:cc:00:00:60",
+                         vendor="Intel Corporate", hostname="NBOT052",
+                         open_ports=[139, 445, 3389])
+        host.signals["smb"] = SmbInfo(computer_name="NBOT052")
+        classifier.classify_host(host)
+        self.assertEqual(host.device_type, "Workstation")
+        self.assertEqual(host.os, "Windows")
+        self.assertGreaterEqual(host.confidence, 50)
+
+
 class TestCategoryTieBreak(unittest.TestCase):
     def test_priority_breaks_equal_weight(self):
         # Equal-weight Router vs Camera -> Router wins (higher priority).
