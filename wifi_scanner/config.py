@@ -160,6 +160,13 @@ PORT_RISK_FLAGS = {
     5900: "OPEN_VNC",
 }
 
+# High-severity flags colour a table row red; any other flag colours it yellow.
+# (RANDOMIZED_MAC / NEW_DEVICE / NO_HOSTNAME are informational, not red.)
+HIGH_RISK_FLAGS = {
+    "OPEN_TELNET", "OPEN_RDP", "OPEN_VNC", "DEFAULT_SNMP",
+    "WEAK_CREDS_HINT", "ROGUE_AP_HINT", "MAC_CHANGED",
+}
+
 # --------------------------------------------------------------------------- #
 # Output / sorting / filtering
 # --------------------------------------------------------------------------- #

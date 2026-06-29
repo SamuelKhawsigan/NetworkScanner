@@ -11,6 +11,7 @@ from rich import box
 from rich.table import Table
 from rich.text import Text
 
+from .. import config
 from ..scanner.models import Host, PoisonAlert
 
 _DASH = "—"
@@ -20,10 +21,20 @@ def _fmt_rtt(ms: float | None) -> str:
     return f"{ms:.1f}" if ms is not None else _DASH
 
 
+def _row_style(flags: list[str]) -> str | None:
+    """Red for high-severity flags, yellow for informational ones, else none."""
+    if any(f in config.HIGH_RISK_FLAGS for f in flags):
+        return "red"
+    if flags:
+        return "yellow"
+    return None
+
+
 def _fmt_flags(flags: list[str]) -> Text:
     if not flags:
         return Text(_DASH, style="dim")
-    return Text(" ".join(flags), style="bold red")
+    high = any(f in config.HIGH_RISK_FLAGS for f in flags)
+    return Text(" ".join(flags), style="bold red" if high else "yellow")
 
 
 def build_host_table(hosts: list[Host], title: str = "Discovered Hosts") -> Table:
@@ -46,7 +57,7 @@ def build_host_table(hosts: list[Host], title: str = "Discovered Hosts") -> Tabl
     table.add_column("Flags")
 
     for h in hosts:
-        row_style = "red" if h.risk_flags else None
+        row_style = _row_style(h.risk_flags)
         # Device-derived strings (mac/vendor/hostname/type) are wrapped in Text
         # so rich never interprets markup or emoji shortcodes inside them — a
         # MAC like "c2:60:07:cd:e2:86" must not turn ":cd:" into 💿.

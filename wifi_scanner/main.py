@@ -183,11 +183,12 @@ def apply_mode_overrides(cfg: ScanConfig) -> ScanConfig:
               help="SQLite DB for historical tracking.")
 @click.option("--verbose", is_flag=True, help="Verbose logging.")
 @click.option("--debug", is_flag=True, help="Debug output.")
+@click.option("--update-oui", is_flag=True, help="(Re)build the local OUI vendor DB, then scan.")
 @click.option("--dry-run", is_flag=True, help="Show the scan plan without sending packets.")
 @click.version_option(__version__, "-V", "--version", prog_name="wifi-scanner")
 def cli(target, mode, ports_profile, timeout, rate_pps, watch, interval, sort,
         filter_expr, output, out_file, no_ports, no_snmp, stealth, known_file,
-        history_db, verbose, debug, dry_run):
+        history_db, verbose, debug, update_oui, dry_run):
     """Office WiFi/LAN scanner — authorized network reconnaissance."""
     from rich.console import Console
     console = Console()
@@ -220,6 +221,9 @@ def cli(target, mode, ports_profile, timeout, rate_pps, watch, interval, sort,
 
     check_environment(cfg, console)
 
+    if update_oui:
+        ensure_oui_db(console, force=True)
+
     if cfg.dry_run:
         print_plan(cfg, console)
         return
@@ -231,14 +235,38 @@ def cli(target, mode, ports_profile, timeout, rate_pps, watch, interval, sort,
         console.print("\n[yellow]Interrupted — stopping scan.[/]")
 
 
-def run_scan(cfg: ScanConfig, console: "Console") -> None:
-    """Execute a scan. Checkpoint 2: ARP discovery + table output.
+def ensure_oui_db(console: "Console", force: bool = False) -> bool:
+    """Build the local OUI DB if missing (or forced). Best-effort — returns
+    True if a usable DB exists afterward, False if the download failed."""
+    from .scanner import oui
 
-    Port scanning and fingerprinting land in later checkpoints; for now every
-    mode performs the ARP sweep and renders the discovered hosts.
+    if config.OUI_DB_PATH.exists() and not force:
+        return True
+    action = "Rebuilding" if force else "Downloading"
+    console.print(f"[cyan]{action} IEEE OUI database[/] (one-time, ~a few MB) …")
+    try:
+        count = oui.update_oui_db()
+        console.print(f"[green]OUI database ready — {count:,} vendor prefixes.[/]")
+        return True
+    except Exception as exc:  # network/parse failure shouldn't abort the scan
+        console.print(
+            f"[yellow]Could not build OUI DB ({exc}).[/] Continuing without "
+            "vendor names; randomized-MAC detection still works (it's offline)."
+        )
+        return config.OUI_DB_PATH.exists()
+
+
+def run_scan(cfg: ScanConfig, console: "Console") -> None:
+    """Execute a scan. Checkpoints 2-3: ARP discovery, OUI vendor lookup,
+    randomized-MAC flagging, and table output.
+
+    Port scanning and fingerprinting land in later checkpoints.
     """
     from .scanner import arp
+    from .scanner.oui import OuiLookup
     from .display.table import build_host_table, build_poison_panel
+
+    ensure_oui_db(console)
 
     console.print(f"\n[cyan]ARP sweep[/] across {', '.join(cfg.targets)} …")
     hosts, alerts = arp.arp_sweep(
@@ -255,10 +283,24 @@ def run_scan(cfg: ScanConfig, console: "Console") -> None:
         )
         return
 
+    # Vendor resolution + randomized-MAC flagging
+    lookup = OuiLookup()
+    try:
+        for host in hosts:
+            lookup.annotate(host)
+    finally:
+        lookup.close()
+
+    randomized = sum(1 for h in hosts if "RANDOMIZED_MAC" in h.risk_flags)
+    identified = sum(1 for h in hosts if h.vendor)
+
     console.print(build_host_table(hosts))
     if alerts:
         console.print(build_poison_panel(alerts))
-    console.print(f"\n[green]{len(hosts)} host(s) discovered.[/]")
+    console.print(
+        f"\n[green]{len(hosts)} host(s) discovered[/] — "
+        f"{identified} vendor-identified, {randomized} randomized MAC(s)."
+    )
 
 
 def print_plan(cfg: ScanConfig, console: "Console") -> None:
