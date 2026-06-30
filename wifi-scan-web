@@ -1,0 +1,3 @@
+#!/bin/bash
+VENV="/root/NetworkScanner/wifi_scanner/venv"
+PYTHONPATH="/root/NetworkScanner" exec "$VENV/bin/python" -m wifi_scanner.web.server "$@"

@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Network Scanner</title>
+<style>
+/* ── Reset & Base ───────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:       #0d1117;
+  --bg2:      #161b22;
+  --bg3:      #21262d;
+  --border:   #30363d;
+  --text:     #c9d1d9;
+  --dim:      #6e7681;
+  --green:    #3fb950;
+  --cyan:     #79c0ff;
+  --yellow:   #d29922;
+  --red:      #f85149;
+  --blue:     #388bfd;
+  --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+}
+html, body { height: 100%; background: var(--bg); color: var(--text);
+             font-family: var(--font-mono); font-size: 13px; line-height: 1.5; }
+a { color: var(--cyan); text-decoration: none; }
+
+/* ── Layout ─────────────────────────────────────────────────────────────── */
+#app { display: flex; flex-direction: column; min-height: 100vh; }
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+header {
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 20px;
+  display: flex; align-items: center; gap: 12px;
+}
+.hdr-title { font-size: 15px; font-weight: 700; color: var(--cyan); letter-spacing: .05em; flex: 1; }
+.hdr-title span { color: var(--dim); font-weight: 400; font-size: 12px; margin-left: 8px; }
+#statusBadge {
+  padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase;
+  background: var(--bg3); color: var(--dim); border: 1px solid var(--border);
+  transition: all .3s;
+}
+#statusBadge.running { background: rgba(63,185,80,.15); color: var(--green); border-color: var(--green); }
+#statusBadge.error   { background: rgba(248,81,73,.15);  color: var(--red);   border-color: var(--red); }
+
+/* ── Config Bar ─────────────────────────────────────────────────────────── */
+#configBar {
+  background: var(--bg2); border-bottom: 1px solid var(--border);
+  padding: 8px 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+}
+#configBar label { display: flex; align-items: center; gap: 6px; color: var(--dim); }
+#configBar input[type=text], #configBar select {
+  background: var(--bg3); border: 1px solid var(--border); color: var(--text);
+  font-family: var(--font-mono); font-size: 12px; padding: 4px 8px; border-radius: 4px;
+  outline: none; transition: border-color .2s;
+}
+#configBar input[type=text] { width: 180px; }
+#configBar input[type=text]:focus, #configBar select:focus { border-color: var(--cyan); }
+#configBar select { cursor: pointer; }
+#configBar input[type=checkbox] { accent-color: var(--cyan); cursor: pointer; }
+.cfg-sep { border-left: 1px solid var(--border); height: 20px; }
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+.btn {
+  padding: 5px 14px; border-radius: 5px; font-family: var(--font-mono);
+  font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid transparent;
+  transition: all .2s; display: inline-flex; align-items: center; gap: 6px;
+}
+.btn-primary { background: var(--green); color: #000; border-color: var(--green); }
+.btn-primary:hover { filter: brightness(1.15); }
+.btn-primary:disabled { opacity: .4; cursor: not-allowed; filter: none; }
+.btn-danger  { background: rgba(248,81,73,.15); color: var(--red); border-color: var(--red); }
+.btn-danger:hover { background: rgba(248,81,73,.25); }
+.btn-secondary { background: var(--bg3); color: var(--text); border-color: var(--border); }
+.btn-secondary:hover { border-color: var(--cyan); color: var(--cyan); }
+
+/* ── Progress ────────────────────────────────────────────────────────────── */
+#progressSection {
+  background: var(--bg2); border-bottom: 1px solid var(--border);
+  padding: 10px 20px; display: none; flex-direction: column; gap: 6px;
+}
+#progressSection.visible { display: flex; }
+#phaseName { color: var(--cyan); font-size: 12px; }
+.progress-track {
+  height: 4px; background: var(--bg3); border-radius: 2px; overflow: hidden;
+}
+#progressFill {
+  height: 100%; width: 0%; background: var(--cyan);
+  border-radius: 2px; transition: width .3s ease;
+}
+#progressFill.pulse {
+  animation: pulse 1.5s ease-in-out infinite;
+  width: 100%;
+}
+@keyframes pulse {
+  0%,100% { opacity: .3; } 50% { opacity: 1; }
+}
+#progressMeta { display: flex; gap: 20px; color: var(--dim); font-size: 11px; }
+
+/* ── Summary Strip ───────────────────────────────────────────────────────── */
+#summaryStrip {
+  background: var(--bg2); border-bottom: 1px solid var(--border);
+  padding: 8px 20px; display: flex; flex-wrap: wrap; gap: 18px; align-items: center;
+}
+.sum-chip {
+  display: flex; align-items: center; gap: 5px; color: var(--dim); font-size: 12px;
+}
+.sum-chip .val { color: var(--text); font-weight: 700; }
+.sum-chip.flagged .val { color: var(--red); }
+.sum-chip.hosts .val { color: var(--cyan); }
+
+/* ── Main Content ────────────────────────────────────────────────────────── */
+#main { flex: 1; padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
+
+/* ── Alerts Panel ────────────────────────────────────────────────────────── */
+#alertsPanel {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+  overflow: hidden;
+}
+.panel-header {
+  padding: 8px 14px; background: var(--bg3); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;
+}
+.panel-header h3 { font-size: 12px; font-weight: 600; flex: 1; }
+.panel-header .toggle { color: var(--dim); font-size: 11px; }
+.badge {
+  padding: 1px 7px; border-radius: 10px; font-size: 10px; font-weight: 700;
+  background: var(--bg); border: 1px solid var(--border); color: var(--dim);
+}
+.badge.red   { background: rgba(248,81,73,.15); color: var(--red); border-color: var(--red); }
+.badge.yellow{ background: rgba(210,153,34,.15); color: var(--yellow); border-color: var(--yellow); }
+#alertsBody { padding: 0; }
+.alert-row {
+  display: flex; align-items: baseline; gap: 10px; padding: 7px 14px;
+  border-bottom: 1px solid var(--border); font-size: 12px;
+}
+.alert-row:last-child { border-bottom: none; }
+.alert-row.high { border-left: 3px solid var(--red); }
+.alert-row.warn { border-left: 3px solid var(--yellow); }
+.alert-mark.high { color: var(--red); font-weight: 700; width: 20px; }
+.alert-mark.warn { color: var(--yellow); width: 20px; }
+.alert-flag { font-weight: 700; width: 150px; flex-shrink: 0; }
+.alert-flag.high { color: var(--red); }
+.alert-flag.warn { color: var(--yellow); }
+.alert-ip   { width: 120px; flex-shrink: 0; color: var(--cyan); }
+.alert-msg  { color: var(--dim); }
+.no-alerts  { padding: 12px 14px; color: var(--green); font-size: 12px; }
+
+/* ── Filter Bar ──────────────────────────────────────────────────────────── */
+#filterBar {
+  display: flex; align-items: center; gap: 10px;
+}
+#filterBar input {
+  background: var(--bg2); border: 1px solid var(--border); color: var(--text);
+  font-family: var(--font-mono); font-size: 12px; padding: 4px 10px; border-radius: 4px;
+  outline: none; width: 260px; transition: border-color .2s;
+}
+#filterBar input:focus { border-color: var(--cyan); }
+#filterBar input::placeholder { color: var(--dim); }
+#hostCount { color: var(--dim); font-size: 11px; margin-left: auto; }
+
+/* ── Device Table ────────────────────────────────────────────────────────── */
+#tableWrap {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+  overflow: auto; flex: 1;
+}
+table { width: 100%; border-collapse: collapse; }
+thead { position: sticky; top: 0; z-index: 2; }
+th {
+  background: var(--bg3); color: var(--dim); font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .06em;
+  padding: 8px 12px; text-align: left; white-space: nowrap;
+  border-bottom: 1px solid var(--border); cursor: pointer; user-select: none;
+  transition: color .2s;
+}
+th:hover { color: var(--cyan); }
+th.sort-asc::after  { content: ' ▲'; color: var(--cyan); }
+th.sort-desc::after { content: ' ▼'; color: var(--cyan); }
+td {
+  padding: 6px 12px; border-bottom: 1px solid rgba(48,54,61,.5);
+  font-size: 12px; white-space: nowrap; vertical-align: middle;
+}
+tr:last-child td { border-bottom: none; }
+tbody tr { transition: background .15s; }
+tbody tr:hover { background: var(--bg3); }
+tbody tr.row-high { border-left: 3px solid var(--red);    background: rgba(248,81,73,.06); }
+tbody tr.row-warn { border-left: 3px solid var(--yellow); background: rgba(210,153,34,.05); }
+tbody tr.row-high:hover { background: rgba(248,81,73,.12); }
+tbody tr.row-warn:hover { background: rgba(210,153,34,.10); }
+
+.td-ip       { color: var(--cyan); font-weight: 600; }
+.td-mac      { color: var(--dim); }
+.td-type     { color: var(--text); }
+.td-conf-bar { display: flex; align-items: center; gap: 6px; }
+.conf-fill   { height: 3px; border-radius: 2px; }
+.td-flags    { display: flex; flex-wrap: wrap; gap: 4px; }
+.flag-chip {
+  padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600;
+  border: 1px solid transparent;
+}
+.flag-chip.high { background: rgba(248,81,73,.15); color: var(--red); border-color: rgba(248,81,73,.3); }
+.flag-chip.warn { background: rgba(210,153,34,.15); color: var(--yellow); border-color: rgba(210,153,34,.3); }
+.flag-chip.info { background: var(--bg3); color: var(--dim); border-color: var(--border); }
+
+/* ── Empty State ─────────────────────────────────────────────────────────── */
+#emptyState {
+  display: none; flex-direction: column; align-items: center; justify-content: center;
+  padding: 60px 20px; gap: 12px; color: var(--dim);
+}
+#emptyState.visible { display: flex; }
+#emptyState .icon { font-size: 40px; }
+#emptyState p { font-size: 13px; text-align: center; }
+
+/* ── History Panel ───────────────────────────────────────────────────────── */
+#historyPanel {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+  overflow: hidden;
+}
+#historyBody { max-height: 200px; overflow-y: auto; }
+.hist-row {
+  display: flex; gap: 12px; padding: 5px 14px;
+  border-bottom: 1px solid rgba(48,54,61,.5); font-size: 11px; color: var(--dim);
+}
+.hist-row:last-child { border-bottom: none; }
+.hist-type { font-weight: 700; width: 120px; flex-shrink: 0; }
+.hist-type.NEW_DEVICE   { color: var(--yellow); }
+.hist-type.IP_CHANGED   { color: var(--blue); }
+.hist-type.MAC_CHANGED  { color: var(--red); }
+.hist-ts { color: var(--dim); flex-shrink: 0; }
+.hist-detail { color: var(--text); }
+
+/* ── Scrollbar ───────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg2); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--dim); }
+</style>
+</head>
+<body>
+<div id="app">
+
+<!-- ── Header ──────────────────────────────────────────────────────────── -->
+<header>
+  <div class="hdr-title">
+    ◈ NETWORK SCANNER
+    <span id="hdrTarget"></span>
+  </div>
+  <div id="statusBadge">● IDLE</div>
+  <button class="btn btn-secondary" onclick="loadHistory()" title="Refresh history">⟳ History</button>
+  <button class="btn btn-primary" id="runBtn" onclick="startScan()">▶ Run Scan</button>
+  <button class="btn btn-danger"  id="stopHint" style="display:none" disabled>■ Running…</button>
+</header>
+
+<!-- ── Config Bar ───────────────────────────────────────────────────────── -->
+<div id="configBar">
+  <label>Target <input type="text" id="cfgTarget" value="10.8.50.0/23" placeholder="CIDR"></label>
+  <div class="cfg-sep"></div>
+  <label>Mode
+    <select id="cfgMode">
+      <option value="full">full</option>
+      <option value="quick">quick</option>
+      <option value="stealth">stealth</option>
+    </select>
+  </label>
+  <label>Ports
+    <select id="cfgPorts">
+      <option value="common">common</option>
+      <option value="full">full</option>
+      <option value="iot">iot</option>
+      <option value="printer">printer</option>
+      <option value="camera">camera</option>
+    </select>
+  </label>
+  <div class="cfg-sep"></div>
+  <label><input type="checkbox" id="cfgNoPorts"> Skip ports</label>
+  <label><input type="checkbox" id="cfgNoSnmp"> Skip SNMP</label>
+</div>
+
+<!-- ── Progress ─────────────────────────────────────────────────────────── -->
+<div id="progressSection">
+  <div id="phaseName">Initialising…</div>
+  <div class="progress-track"><div id="progressFill" class="pulse"></div></div>
+  <div id="progressMeta">
+    <span id="progressText">—</span>
+    <span id="elapsedTime">0s</span>
+    <span id="hostsFoundCount"></span>
+  </div>
+</div>
+
+<!-- ── Summary Strip ────────────────────────────────────────────────────── -->
+<div id="summaryStrip" style="display:none">
+  <div class="sum-chip hosts"><span id="sumTotal" class="val">0</span> hosts</div>
+  <div class="sum-chip flagged"><span id="sumFlagged" class="val">0</span> flagged</div>
+  <div class="sum-chip"><span id="sumRouters" class="val">0</span> routers</div>
+  <div class="sum-chip"><span id="sumAPs" class="val">0</span> APs</div>
+  <div class="sum-chip"><span id="sumWorkstations" class="val">0</span> workstations</div>
+  <div class="sum-chip"><span id="sumPrinters" class="val">0</span> printers</div>
+  <div class="sum-chip"><span id="sumMobile" class="val">0</span> mobile</div>
+  <div class="sum-chip"><span id="sumUnknown" class="val">0</span> unknown</div>
+</div>
+
+<!-- ── Main Content ─────────────────────────────────────────────────────── -->
+<div id="main">
+
+  <!-- Alerts -->
+  <div id="alertsPanel">
+    <div class="panel-header" onclick="togglePanel('alertsBody','alertToggle')">
+      <h3>⚠ Security Alerts <span class="badge" id="alertBadge">0</span></h3>
+      <span class="toggle" id="alertToggle">▲</span>
+    </div>
+    <div id="alertsBody">
+      <div class="no-alerts">✓ No security alerts.</div>
+    </div>
+  </div>
+
+  <!-- Filter + count -->
+  <div id="filterBar">
+    <input type="text" id="filterInput" placeholder="filter: type=router  flags=NEW_DEVICE  vendor=cisco  10.8.50"
+           oninput="applyFilter()">
+    <button class="btn btn-secondary" onclick="clearFilter()">✕</button>
+    <span id="hostCount"></span>
+  </div>
+
+  <!-- Device table -->
+  <div id="tableWrap">
+    <div id="emptyState">
+      <div class="icon">◈</div>
+      <p>No hosts yet.<br>Configure the target above and click <strong>Run Scan</strong>.</p>
+    </div>
+    <table id="devTable" style="display:none">
+      <thead>
+        <tr>
+          <th onclick="sortBy('ip')">IP</th>
+          <th onclick="sortBy('mac')">MAC</th>
+          <th onclick="sortBy('vendor')">Vendor</th>
+          <th onclick="sortBy('device_type')">Type</th>
+          <th onclick="sortBy('hostname')">Hostname</th>
+          <th onclick="sortBy('os')">OS</th>
+          <th>Ports</th>
+          <th onclick="sortBy('confidence')">Conf</th>
+          <th>Flags</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <!-- History -->
+  <div id="historyPanel">
+    <div class="panel-header" onclick="togglePanel('historyBody','historyToggle')">
+      <h3>📋 Recent History Events</h3>
+      <span class="toggle" id="historyToggle">▲</span>
+    </div>
+    <div id="historyBody">
+      <div class="no-alerts" style="color:var(--dim)">No history loaded.</div>
+    </div>
+  </div>
+
+</div><!-- #main -->
+</div><!-- #app -->
+
+<script>
+/* ── State ────────────────────────────────────────────────────────────────── */
+const HIGH_RISK = new Set([
+  'OPEN_TELNET','OPEN_RDP','OPEN_VNC','DEFAULT_SNMP',
+  'WEAK_CREDS_HINT','ROGUE_AP_HINT','MAC_CHANGED'
+]);
+const WARN_FLAGS = new Set([
+  'NEW_DEVICE','IP_CHANGED','UNUSUAL_TTL','STEALTHY'
+]);
+
+let state = {
+  hosts: [],
+  sortKey: 'ip',
+  sortAsc: true,
+  filter: '',
+  scanning: false,
+  startedAt: null,
+  elapsedTimer: null,
+  currentProgress: {key: null, completed: 0, total: 0},
+};
+let eventSource = null;
+
+/* ── Init ─────────────────────────────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', () => {
+  fetchHosts();
+  fetchAlerts();
+  loadHistory();
+  pollStatus();
+  setInterval(pollStatus, 5000);
+});
+
+/* ── API helpers ──────────────────────────────────────────────────────────── */
+async function api(path, options) {
+  const r = await fetch(path, options);
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error(d.detail || `HTTP ${r.status}`);
+  }
+  return r.json();
+}
+
+async function fetchHosts() {
+  try {
+    const hosts = await api('/api/hosts');
+    state.hosts = hosts;
+    renderTable();
+    renderSummary();
+  } catch (_) {}
+}
+
+async function fetchAlerts() {
+  try {
+    const alerts = await api('/api/alerts');
+    renderAlerts(alerts);
+  } catch (_) {}
+}
+
+async function pollStatus() {
+  if (state.scanning) return;
+  try {
+    const s = await api('/api/status');
+    if (s.running && !state.scanning) {
+      state.scanning = true;
+      setScanning(true);
+      connectSSE();
+    }
+  } catch (_) {}
+}
+
+async function loadHistory() {
+  try {
+    const events = await api('/api/history?limit=40');
+    renderHistory(events);
+  } catch (_) {}
+}
+
+/* ── Scan trigger ─────────────────────────────────────────────────────────── */
+async function startScan() {
+  if (state.scanning) return;
+  const target      = document.getElementById('cfgTarget').value.trim();
+  const mode        = document.getElementById('cfgMode').value;
+  const portsProf   = document.getElementById('cfgPorts').value;
+  const noPorts     = document.getElementById('cfgNoPorts').checked;
+  const noSnmp      = document.getElementById('cfgNoSnmp').checked;
+
+  try {
+    await api('/api/scan', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({target, mode, ports_profile: portsProf,
+                            no_ports: noPorts, no_snmp: noSnmp}),
+    });
+    state.scanning = true;
+    state.startedAt = Date.now();
+    setScanning(true);
+    connectSSE();
+  } catch (err) {
+    alert('Could not start scan: ' + err.message);
+  }
+}
+
+/* ── SSE ──────────────────────────────────────────────────────────────────── */
+function connectSSE() {
+  if (eventSource) { eventSource.close(); eventSource = null; }
+  eventSource = new EventSource('/api/scan/stream');
+  eventSource.onmessage = e => handleEvent(JSON.parse(e.data));
+  eventSource.onerror   = () => {
+    if (eventSource && eventSource.readyState === EventSource.CLOSED) {
+      eventSource = null;
+      if (state.scanning) finishScan();
+    }
+  };
+}
+
+function handleEvent(ev) {
+  switch (ev.type) {
+    case 'phase':
+      document.getElementById('phaseName').textContent = ev.name;
+      state.currentProgress = {key: ev.key, completed: 0, total: ev.total || 0};
+      setProgressBar(0, 0);
+      break;
+    case 'progress':
+      if (ev.key === state.currentProgress.key) {
+        setProgressBar(ev.completed, ev.total);
+        document.getElementById('progressText').textContent =
+          `${ev.completed.toLocaleString()} / ${ev.total.toLocaleString()}`;
+      }
+      break;
+    case 'hosts':
+      state.hosts = ev.hosts;
+      renderTable();
+      renderSummary();
+      document.getElementById('hostsFoundCount').textContent =
+        `${ev.hosts.length} host${ev.hosts.length !== 1 ? 's' : ''} found`;
+      break;
+    case 'complete':
+      if (ev.alerts) renderAlerts(ev.alerts);
+      finishScan();
+      loadHistory();
+      break;
+    case 'error':
+      document.getElementById('phaseName').textContent = '✗ Error: ' + ev.message;
+      finishScan(true);
+      break;
+    case 'ping':
+      break;
+  }
+}
+
+function setProgressBar(completed, total) {
+  const fill = document.getElementById('progressFill');
+  if (total === 0) {
+    fill.style.width = '0%';
+    fill.classList.add('pulse');
+  } else {
+    fill.classList.remove('pulse');
+    fill.style.width = Math.min(100, Math.round(completed / total * 100)) + '%';
+  }
+}
+
+function setScanning(on) {
+  document.getElementById('progressSection').classList.toggle('visible', on);
+  document.getElementById('runBtn').style.display   = on ? 'none' : '';
+  document.getElementById('stopHint').style.display = on ? '' : 'none';
+  const badge = document.getElementById('statusBadge');
+  badge.textContent = on ? '● SCANNING' : '● IDLE';
+  badge.className = on ? 'running' : '';
+  if (on) {
+    document.getElementById('progressFill').classList.add('pulse');
+    state.elapsedTimer = setInterval(() => {
+      const s = Math.round((Date.now() - state.startedAt) / 1000);
+      document.getElementById('elapsedTime').textContent =
+        s < 60 ? `${s}s` : `${Math.floor(s/60)}m ${s%60}s`;
+    }, 1000);
+  }
+}
+
+function finishScan(isError = false) {
+  state.scanning = false;
+  if (eventSource) { eventSource.close(); eventSource = null; }
+  clearInterval(state.elapsedTimer);
+  setScanning(false);
+  if (isError) {
+    const badge = document.getElementById('statusBadge');
+    badge.textContent = '● ERROR'; badge.className = 'error';
+  }
+  fetchAlerts();
+}
+
+/* ── Table rendering ──────────────────────────────────────────────────────── */
+function ipToInt(ip) {
+  const p = ip.split('.').map(Number);
+  return (p[0]<<24 | p[1]<<16 | p[2]<<8 | p[3]) >>> 0;
+}
+
+function sortHosts(hosts) {
+  const k = state.sortKey;
+  return [...hosts].sort((a, b) => {
+    let va = a[k] ?? '', vb = b[k] ?? '';
+    if (k === 'ip')         { va = ipToInt(va); vb = ipToInt(vb); }
+    else if (k === 'confidence') { va = Number(va); vb = Number(vb); }
+    else { va = String(va).toLowerCase(); vb = String(vb).toLowerCase(); }
+    const r = va < vb ? -1 : va > vb ? 1 : 0;
+    return state.sortAsc ? r : -r;
+  });
+}
+
+function filterHosts(hosts) {
+  const f = state.filter.trim().toLowerCase();
+  if (!f) return hosts;
+  // Support key=value and plain substring
+  const kv = f.match(/^(\w+)=(.+)$/);
+  if (kv) {
+    const [, key, val] = kv;
+    return hosts.filter(h => {
+      if (key === 'type')   return (h.device_type || '').toLowerCase().includes(val);
+      if (key === 'vendor') return (h.vendor || '').toLowerCase().includes(val);
+      if (key === 'flags')  return h.risk_flags.some(fl => fl.toLowerCase().includes(val));
+      if (key === 'os')     return (h.os || '').toLowerCase().includes(val);
+      if (key === 'conf')   return (h.confidence_label || '').toLowerCase().includes(val);
+      return true;
+    });
+  }
+  return hosts.filter(h =>
+    h.ip.includes(f) || (h.mac||'').includes(f) || (h.hostname||'').toLowerCase().includes(f) ||
+    (h.vendor||'').toLowerCase().includes(f) || (h.device_type||'').toLowerCase().includes(f)
+  );
+}
+
+function rowClass(h) {
+  if (h.risk_flags.some(f => HIGH_RISK.has(f))) return 'row-high';
+  if (h.risk_flags.some(f => WARN_FLAGS.has(f))) return 'row-warn';
+  return '';
+}
+
+function flagChip(f) {
+  const cls = HIGH_RISK.has(f) ? 'high' : WARN_FLAGS.has(f) ? 'warn' : 'info';
+  const short = f.replace('_', ' ').replace(/_/g, ' ');
+  return `<span class="flag-chip ${cls}" title="${f}">${short}</span>`;
+}
+
+function confColor(score) {
+  if (score >= 90) return '#3fb950';
+  if (score >= 70) return '#79c0ff';
+  if (score >= 50) return '#d29922';
+  if (score >= 30) return '#e3b341';
+  return '#6e7681';
+}
+
+function renderTable() {
+  const filtered = filterHosts(sortHosts(state.hosts));
+  const tbody  = document.getElementById('tbody');
+  const table  = document.getElementById('devTable');
+  const empty  = document.getElementById('emptyState');
+  const countEl = document.getElementById('hostCount');
+
+  if (state.hosts.length === 0) {
+    table.style.display = 'none'; empty.classList.add('visible');
+    countEl.textContent = '';
+    return;
+  }
+  empty.classList.remove('visible');
+  table.style.display = '';
+  countEl.textContent =
+    filtered.length === state.hosts.length
+      ? `${state.hosts.length} hosts`
+      : `${filtered.length} / ${state.hosts.length} hosts`;
+
+  tbody.innerHTML = filtered.map(h => {
+    const flags   = h.risk_flags.map(flagChip).join('');
+    const ports   = h.open_ports.slice(0, 6).join(', ') + (h.open_ports.length > 6 ? '…' : '');
+    const color   = confColor(h.confidence);
+    const barW    = h.confidence;
+    const cls     = rowClass(h);
+    const mac     = h.mac || '—';
+    const macDisp = h.risk_flags.includes('RANDOMIZED_MAC')
+                    ? `<span title="Randomized MAC" style="color:var(--yellow)">${mac}</span>`
+                    : mac;
+    return `<tr class="${cls}">
+      <td class="td-ip">${h.ip}</td>
+      <td class="td-mac">${macDisp}</td>
+      <td>${h.vendor || '<span style="color:var(--dim)">—</span>'}</td>
+      <td class="td-type">${h.device_type || '—'}</td>
+      <td>${h.hostname || '<span style="color:var(--dim)">—</span>'}</td>
+      <td>${h.os || '<span style="color:var(--dim)">—</span>'}</td>
+      <td>${ports || '<span style="color:var(--dim)">—</span>'}</td>
+      <td>
+        <div class="td-conf-bar">
+          <div class="conf-fill" style="width:${barW}px;background:${color};max-width:80px"></div>
+          <span style="color:${color}">${h.confidence}%</span>
+        </div>
+      </td>
+      <td><div class="td-flags">${flags || '<span style="color:var(--dim)">—</span>'}</div></td>
+    </tr>`;
+  }).join('');
+
+  // Update sort indicators
+  document.querySelectorAll('th').forEach(th => {
+    th.classList.remove('sort-asc','sort-desc');
+  });
+  const headers = ['ip','mac','vendor','device_type','hostname','os',null,'confidence',null];
+  headers.forEach((key, i) => {
+    if (key === state.sortKey) {
+      const ths = document.querySelectorAll('th');
+      ths[i].classList.add(state.sortAsc ? 'sort-asc' : 'sort-desc');
+    }
+  });
+}
+
+function sortBy(key) {
+  if (state.sortKey === key) state.sortAsc = !state.sortAsc;
+  else { state.sortKey = key; state.sortAsc = true; }
+  renderTable();
+}
+
+function applyFilter() {
+  state.filter = document.getElementById('filterInput').value;
+  renderTable();
+}
+
+function clearFilter() {
+  document.getElementById('filterInput').value = '';
+  state.filter = '';
+  renderTable();
+}
+
+/* ── Alerts rendering ─────────────────────────────────────────────────────── */
+function renderAlerts(alerts) {
+  const body  = document.getElementById('alertsBody');
+  const badge = document.getElementById('alertBadge');
+  const count = alerts.length;
+  badge.textContent = count;
+  badge.className   = 'badge' + (alerts.some(a => a.severity === 'high') ? ' red'
+                                : count > 0 ? ' yellow' : '');
+
+  if (count === 0) {
+    body.innerHTML = '<div class="no-alerts">✓ No security alerts.</div>';
+    return;
+  }
+  body.innerHTML = alerts.map(a =>
+    `<div class="alert-row ${a.severity}">
+      <span class="alert-mark ${a.severity}">${a.severity === 'high' ? '[!]' : '[*]'}</span>
+      <span class="alert-flag ${a.severity}">${a.flag}</span>
+      <span class="alert-ip">${a.ip}</span>
+      <span class="alert-msg">${a.message}</span>
+    </div>`
+  ).join('');
+}
+
+/* ── Summary rendering ────────────────────────────────────────────────────── */
+function renderSummary() {
+  const h = state.hosts;
+  if (h.length === 0) {
+    document.getElementById('summaryStrip').style.display = 'none';
+    return;
+  }
+  document.getElementById('summaryStrip').style.display = '';
+  const byType = (t) => h.filter(x => x.device_type === t).length;
+  const flagged = h.filter(x => x.risk_flags.some(f => HIGH_RISK.has(f) || WARN_FLAGS.has(f))).length;
+  document.getElementById('sumTotal').textContent       = h.length;
+  document.getElementById('sumFlagged').textContent     = flagged;
+  document.getElementById('sumRouters').textContent     = byType('Router') + byType('Switch');
+  document.getElementById('sumAPs').textContent         = byType('Access Point');
+  document.getElementById('sumWorkstations').textContent= byType('Workstation') + byType('Laptop');
+  document.getElementById('sumPrinters').textContent    = byType('Printer');
+  document.getElementById('sumMobile').textContent      = byType('Mobile');
+  document.getElementById('sumUnknown').textContent     = byType('Unknown');
+  document.getElementById('hdrTarget').textContent      = '│ ' + (document.getElementById('cfgTarget').value || '');
+}
+
+/* ── History rendering ────────────────────────────────────────────────────── */
+function renderHistory(events) {
+  const body = document.getElementById('historyBody');
+  if (!events || events.length === 0) {
+    body.innerHTML = '<div class="no-alerts" style="color:var(--dim)">No history events yet.</div>';
+    return;
+  }
+  body.innerHTML = events.map(e => {
+    const ts = e.timestamp ? e.timestamp.replace('T',' ').replace(/\.\d+.*$/,'') : '—';
+    return `<div class="hist-row">
+      <span class="hist-type ${e.event_type}">${e.event_type}</span>
+      <span class="hist-ts">${ts}</span>
+      <span style="color:var(--cyan);width:100px;flex-shrink:0">${e.ip || '—'}</span>
+      <span class="hist-detail">${e.detail || ''}</span>
+    </div>`;
+  }).join('');
+}
+
+/* ── Panel toggle ─────────────────────────────────────────────────────────── */
+function togglePanel(bodyId, toggleId) {
+  const body   = document.getElementById(bodyId);
+  const toggle = document.getElementById(toggleId);
+  const hidden = body.style.display === 'none';
+  body.style.display   = hidden ? '' : 'none';
+  toggle.textContent   = hidden ? '▲' : '▼';
+}
+</script>
+</body>
+</html>

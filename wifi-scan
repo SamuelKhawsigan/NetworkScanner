@@ -1,13 +1,4 @@
 #!/usr/bin/env bash
-# Convenience launcher: run the scanner as root with the user's installed
-# dependencies (scapy, rich, ...) visible to root's Python. Always uses the
-# current source tree, so code changes are picked up without reinstalling.
-#
-# Usage:  ./wifi-scan --mode full --target 10.8.50.0/23
 set -euo pipefail
-
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Resolve the invoking (non-root) user's site-packages, even under sudo.
-USER_SITE="$(python3 -m site --user-site 2>/dev/null || true)"
-
-exec sudo env "PYTHONPATH=${DIR}:${USER_SITE}" python3 -m wifi_scanner.main "$@"
+exec "${DIR}/venv/bin/python3" -m wifi_scanner.main "$@"

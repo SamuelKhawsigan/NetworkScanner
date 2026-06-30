@@ -487,6 +487,7 @@ class HttpInfo:
     server: str | None = None
     title: str | None = None
     patterns: list[str] = field(default_factory=list)
+    has_login_form: bool = False
 
 
 # Substring -> product/vendor hint for admin pages / device UIs.
@@ -499,11 +500,20 @@ HTTP_PATTERNS = {
     "netgear": "Netgear", "tp-link": "TP-Link", "fritz!box": "AVM FRITZ!Box",
 }
 
+# Devices whose HTTP admin pages are known to ship with default credentials.
+_WEAK_CREDS_DEVICES = {
+    "DD-WRT", "OpenWrt", "Tomato", "Cisco IOS", "MikroTik RouterOS",
+    "HP JetDirect", "HP LaserJet", "Hikvision", "Dahua",
+    "Synology", "QNAP", "Netgear", "TP-Link", "AVM FRITZ!Box",
+}
+
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+# A password input in the response body strongly suggests an admin login page.
+_LOGIN_FORM_RE = re.compile(r'type\s*=\s*["\']password["\']', re.IGNORECASE)
 
 
 def parse_http(headers: dict[str, str], body: str, port: int = 0) -> HttpInfo:
-    """Extract Server header, <title>, and known device patterns."""
+    """Extract Server header, <title>, known device patterns, and login-form presence."""
     info = HttpInfo(port=port, server=headers.get("server"))
     match = _TITLE_RE.search(body)
     if match:
@@ -512,6 +522,7 @@ def parse_http(headers: dict[str, str], body: str, port: int = 0) -> HttpInfo:
     for needle, label in HTTP_PATTERNS.items():
         if needle in haystack and label not in info.patterns:
             info.patterns.append(label)
+    info.has_login_form = bool(_LOGIN_FORM_RE.search(body))
     return info
 
 
@@ -615,6 +626,11 @@ def probe_host(host: Host, *, do_snmp: bool = True, do_udp: bool = True,
             _add_source(host, "http_banner")
             if not host.hostname and info.title:
                 host.hostname = info.title
+            # Login page on a device known to ship with default credentials.
+            if (info.has_login_form
+                    and any(p in _WEAK_CREDS_DEVICES for p in info.patterns)
+                    and "WEAK_CREDS_HINT" not in host.risk_flags):
+                host.risk_flags.append("WEAK_CREDS_HINT")
 
 
 def _add_source(host: Host, source: str) -> None:

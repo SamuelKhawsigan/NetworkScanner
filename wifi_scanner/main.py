@@ -274,13 +274,35 @@ def _run_pipeline(cfg: ScanConfig, reporter, console: "Console"):
     from .scanner import arp, classifier
 
     reporter.phase(f"ARP sweep — {', '.join(cfg.targets)}", "arp")
-    hosts, poison = arp.arp_sweep(
-        cfg.targets, timeout=cfg.timeout,
-        retries=config.DEFAULT_ARP_RETRIES, rate_pps=cfg.rate_pps,
-    )
+    try:
+        hosts, poison = arp.arp_sweep(
+            cfg.targets, timeout=cfg.timeout,
+            retries=config.DEFAULT_ARP_RETRIES, rate_pps=cfg.rate_pps,
+        )
+    except PermissionError:
+        console.print(
+            "[red]Permission denied[/] — ARP sweep needs raw sockets. "
+            "Re-run with [bold]sudo[/]."
+        )
+        return [], []
+    except ImportError as exc:
+        console.print(
+            f"[red]Missing dependency:[/] {exc}. "
+            "Install it with [bold]pip install scapy[/]."
+        )
+        return [], []
+    except OSError as exc:
+        console.print(f"[red]ARP sweep failed:[/] {exc}")
+        return [], []
     reporter.finish("arp")
     reporter.set_hosts(hosts)
+
     if not hosts:
+        if cfg.verbose:
+            console.print(
+                "[dim]ARP sweep returned no replies — check that the target "
+                "network is reachable and that you are running as root.[/]"
+            )
         return hosts, poison
 
     _annotate_oui(hosts)
@@ -291,11 +313,19 @@ def _run_pipeline(cfg: ScanConfig, reporter, console: "Console"):
     classifier.classify_hosts(hosts)
     reporter.finish("classify")
     reporter.set_hosts(hosts)
+
+    if cfg.debug:
+        _debug_print_signals(hosts, console)
+
     return hosts, poison
 
 
 def run_single(cfg: ScanConfig, console: "Console") -> None:
-    """One scan pass with a transient dashboard, then the final report."""
+    """One scan pass with a transient dashboard, then the final report.
+
+    Ctrl+C at any point is caught gracefully: whatever hosts were discovered
+    before the interrupt are reported and exported normally.
+    """
     import time
     from datetime import datetime, timezone
     from .display.live_view import LiveDashboard, StaticReporter
@@ -307,19 +337,28 @@ def run_single(cfg: ScanConfig, console: "Console") -> None:
     reporter = (LiveDashboard(cfg, console) if use_live
                 else StaticReporter(cfg, console))
 
-    with reporter:
-        hosts, poison = _run_pipeline(cfg, reporter, console)
+    hosts: list = []
+    poison: list = []
+    interrupted = False
+    try:
+        with reporter:
+            hosts, poison = _run_pipeline(cfg, reporter, console)
+    except KeyboardInterrupt:
+        interrupted = True
+        hosts = list(getattr(reporter, "hosts", []))
+        console.print("\n[yellow]Scan interrupted — showing partial results.[/]")
 
     if not hosts:
-        console.print(
-            "[yellow]No hosts answered.[/] On WSL2 this usually means "
-            "mirrored networking isn't active — see the note above."
-        )
+        if not interrupted:
+            console.print(
+                "[yellow]No hosts answered.[/] On WSL2 this usually means "
+                "mirrored networking isn't active — see the note above."
+            )
         return
 
     events = _record_history(cfg, hosts, console)
     _print_final_report(cfg, hosts, poison, console)
-    _report_history(events, console)
+    _report_history(events, console, verbose=cfg.verbose)
 
     if cfg.output:
         _write_exports(cfg, hosts, timestamp, time.monotonic() - started, console)
@@ -381,28 +420,103 @@ def _watch_wait(dashboard, interval: int) -> None:
         time.sleep(1)
 
 
+def load_known_macs(path: str, console: "Console") -> set[str]:
+    """Load whitelisted MACs from a JSON known-file.
+
+    Accepts three shapes:
+    - A list of MAC strings:          ["aa:bb:...", ...]
+    - A list of device objects:       [{"mac": "aa:bb:...", ...}, ...]
+    - A scan-export object:           {"devices": [{"mac": "aa:bb:...", ...}]}
+    MACs are normalised to lower-case so comparisons are case-insensitive.
+    """
+    import json
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        console.print(f"[yellow]Could not load known-file '{path}' ({exc}) — ignored.[/]")
+        return set()
+
+    items = data
+    if isinstance(data, dict):
+        items = data.get("devices", [])
+
+    macs: set[str] = set()
+    for item in items:
+        if isinstance(item, str):
+            macs.add(item.lower())
+        elif isinstance(item, dict) and "mac" in item:
+            macs.add(str(item["mac"]).lower())
+
+    if not macs:
+        console.print(f"[yellow]Known-file '{path}' contained no recognisable MACs.[/]")
+    return macs
+
+
+def _suppress_known_flags(hosts, known_macs: set[str]) -> None:
+    """Remove NEW_DEVICE and ROGUE_AP_HINT from hosts whose MAC is whitelisted."""
+    suppress = {"NEW_DEVICE", "ROGUE_AP_HINT"}
+    for host in hosts:
+        if host.mac.lower() in known_macs:
+            host.risk_flags = [f for f in host.risk_flags if f not in suppress]
+
+
 def _record_history(cfg, hosts, console: "Console"):
     """Diff against history.db and apply NEW_DEVICE/IP_CHANGED/MAC_CHANGED flags."""
     from .scanner.history import HistoryDB
+
+    known_macs: set[str] = set()
+    if cfg.known_file:
+        known_macs = load_known_macs(cfg.known_file, console)
+
     try:
         hist = HistoryDB(cfg.history_db)
     except Exception as exc:               # don't let history break a scan
         console.print(f"[yellow]History tracking unavailable ({exc}).[/]")
         return []
     try:
-        return hist.record_scan(hosts)
+        events = hist.record_scan(hosts, known_macs=known_macs)
     finally:
         hist.close()
 
+    if known_macs:
+        _suppress_known_flags(hosts, known_macs)
+    return events
 
-def _report_history(events, console: "Console") -> None:
+
+def _report_history(events, console: "Console", verbose: bool = False) -> None:
     if not events:
         return
+    if verbose:
+        for ev in events:
+            console.print(
+                f"[dim]  {ev.event_type:<16} {ev.ip:<16} {ev.detail}[/]"
+            )
     counts: dict[str, int] = {}
     for ev in events:
         counts[ev.event_type] = counts.get(ev.event_type, 0) + 1
     parts = ", ".join(f"{n} {t}" for t, n in sorted(counts.items()))
     console.print(f"[cyan]History:[/] {parts} since last scan.")
+
+
+def _debug_print_signals(hosts, console: "Console") -> None:
+    """Print raw signal counts per host for --debug inspection."""
+    from rich.table import Table
+    from rich import box
+
+    table = Table(title="[dim]Debug: per-host signals[/]", box=box.SIMPLE,
+                  show_header=True, header_style="dim")
+    table.add_column("IP", style="dim")
+    table.add_column("Signals")
+    table.add_column("Ports")
+    table.add_column("Conf")
+    table.add_column("Flags")
+    for h in hosts:
+        sigs = ", ".join(h.signals.keys()) if h.signals else "—"
+        ports = ", ".join(str(p) for p in h.open_ports[:6]) if h.open_ports else "—"
+        flags = " ".join(h.risk_flags) if h.risk_flags else "—"
+        table.add_row(h.ip, sigs, ports, str(h.confidence), flags)
+    console.print(table)
 
 
 def _out_path(base: str | None, default_base: str, ext: str) -> str:

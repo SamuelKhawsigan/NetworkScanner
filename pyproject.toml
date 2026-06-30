@@ -13,13 +13,16 @@ dependencies = [
     "rich>=13.7.0",
     "click>=8.1.0",
     "aiohttp>=3.9.0",
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
 ]
 
 [project.scripts]
-wifi-scanner = "wifi_scanner.main:main"
+wifi-scanner  = "wifi_scanner.main:main"
+wifi-scan-web = "wifi_scanner.web.server:main"
 
 [tool.setuptools.packages.find]
 include = ["wifi_scanner*"]
 
 [tool.setuptools.package-data]
-wifi_scanner = ["data/*.json"]
+wifi_scanner = ["data/*.json", "web/*.html"]

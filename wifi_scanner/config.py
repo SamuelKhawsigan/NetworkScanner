@@ -20,7 +20,7 @@ SIGNATURES_PATH = DATA_DIR / "signatures.json"
 # --------------------------------------------------------------------------- #
 # Target / network defaults
 # --------------------------------------------------------------------------- #
-DEFAULT_TARGET = "10.8.50.0/23"          # covers 10.8.50.x and 10.8.51.x
+DEFAULT_TARGET = "10.8.9.0/24"
 DEFAULT_ARP_TIMEOUT = 2                   # seconds to wait per ARP sweep
 DEFAULT_ARP_RETRIES = 2                   # who-has retransmissions
 DEFAULT_RATE_PPS = 100                    # packet rate cap (packets/sec)
