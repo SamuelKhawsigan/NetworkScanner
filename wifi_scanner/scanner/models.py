@@ -1,8 +1,8 @@
 """Shared data models passed between scanning stages.
 
-`Host` starts life from the ARP sweep (Checkpoint 2) carrying only L2/timing
-data. Later checkpoints enrich the same object in place with ports, services,
-fingerprint, classification, and risk flags.
+`Host` starts life from a discovery sweep — ARP (Checkpoint 2) or, later,
+ICMP — carrying only L2/timing data. Later checkpoints enrich the same object
+in place with ports, services, fingerprint, classification, and risk flags.
 """
 
 from __future__ import annotations
@@ -16,7 +16,15 @@ class Host:
     """A single discovered host, enriched as it moves through the pipeline."""
 
     ip: str
-    mac: str
+    mac: str = ""
+
+    # True when discovery actually attempted to resolve a MAC (ARP) and this
+    # is a real (possibly empty-on-failure) result. False means MAC was never
+    # attempted at all — e.g. ICMP discovery, which is L3-only and crosses
+    # subnets ARP can't reach. Keep this distinct from `mac == ""` so
+    # "no MAC attempted" is never silently rendered the same as "MAC lookup
+    # failed".
+    mac_known: bool = True
 
     # --- ARP / timing (Checkpoint 2) ---
     response_time_ms: float | None = None

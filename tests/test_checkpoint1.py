@@ -26,7 +26,7 @@ from wifi_scanner.main import (
 def make_cfg(**overrides) -> ScanConfig:
     """Build a ScanConfig with sensible defaults, overriding select fields."""
     base = dict(
-        targets=["10.8.50.0/23"], mode="full", ports_profile="common",
+        targets=["10.8.50.0/23"], mode="full", discovery="arp", ports_profile="common",
         ports=config.PORTS_COMMON, timeout=2, rate_pps=100, watch=False,
         interval=60, sort="ip", filters={}, output=None, out_file=None,
         no_ports=False, no_snmp=False, stealth=False, known_file=None,
@@ -169,7 +169,7 @@ class TestCliSurface(unittest.TestCase):
         result = self.runner.invoke(cli, ["--dry-run"])
         self.assertEqual(result.exit_code, 0)
         self.assertIn("Scan Plan", result.output)
-        self.assertIn("10.8.50.0/23", result.output)
+        self.assertIn("10.8.9.0/24", result.output)
 
     def test_bad_target_exit_2(self):
         result = self.runner.invoke(cli, ["--dry-run", "--target", "nope"])
@@ -177,6 +177,22 @@ class TestCliSurface(unittest.TestCase):
 
     def test_invalid_mode_rejected(self):
         result = self.runner.invoke(cli, ["--mode", "turbo"])
+        self.assertEqual(result.exit_code, 2)
+
+    def test_dry_run_default_discovery_is_arp(self):
+        result = self.runner.invoke(cli, ["--dry-run"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("arp", result.output)
+        self.assertIn("gives MAC", result.output)
+
+    def test_dry_run_icmp_discovery_plan(self):
+        result = self.runner.invoke(cli, ["--dry-run", "--discovery", "icmp"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("icmp", result.output)
+        self.assertIn("no MAC", result.output)
+
+    def test_invalid_discovery_rejected(self):
+        result = self.runner.invoke(cli, ["--discovery", "bluetooth"])
         self.assertEqual(result.exit_code, 2)
 
     def test_dry_run_stealth_plan_shows_skipped_snmp(self):

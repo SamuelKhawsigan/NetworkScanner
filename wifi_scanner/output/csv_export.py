@@ -8,7 +8,7 @@ from .json_export import host_to_dict
 from ..scanner.models import Host
 
 CSV_COLUMNS = [
-    "ip", "mac", "vendor", "hostname", "device_type", "device_subtype",
+    "ip", "mac", "mac_known", "vendor", "hostname", "device_type", "device_subtype",
     "os", "model", "open_ports", "services", "fingerprint_sources",
     "confidence", "confidence_label", "risk_flags",
     "first_seen", "last_seen", "response_time_ms",

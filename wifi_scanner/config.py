@@ -34,6 +34,19 @@ DEFAULT_MODE = "full"
 DEFAULT_WATCH_INTERVAL = 60               # seconds between watch re-scans
 
 # --------------------------------------------------------------------------- #
+# Discovery method
+# --------------------------------------------------------------------------- #
+# "arp"  — ARP who-has sweep. Gives MAC addresses; scoped to the local
+#          broadcast domain (same subnet/VLAN as this host).
+# "icmp" — ICMP echo sweep. Reaches across routed subnets/VLANs, but gives
+#          no MAC — just IP + alive + latency. Genuinely different capability,
+#          not a drop-in replacement for ARP; see scanner/icmp.py.
+DISCOVERY_MODES = ("arp", "icmp")
+DEFAULT_DISCOVERY = "arp"
+DEFAULT_ICMP_TIMEOUT = 2                  # seconds to wait per ICMP sweep
+DEFAULT_ICMP_RETRIES = 1                  # echo-request retransmissions
+
+# --------------------------------------------------------------------------- #
 # Port profiles
 # --------------------------------------------------------------------------- #
 PORTS_COMMON = [
@@ -165,8 +178,10 @@ RISK_FLAGS = {
     "WEAK_CREDS_HINT": "HTTP login page with known default-creds pattern",
     "UNUSUAL_TTL": "TTL doesn't match expected for detected OS",
     "NO_HOSTNAME": "No hostname resolvable",
-    "STEALTHY": "Responds to ARP but no open ports / protocol response",
+    "STEALTHY": "Responds to discovery probe but no open ports / protocol response",
     "ROGUE_AP_HINT": "Looks like an AP but not in the known-AP list",
+    "NO_MAC_ICMP": "Discovered via ICMP — no MAC address attempted "
+                   "(host may be on another subnet/VLAN)",
 }
 
 # Port -> risk flag mapping for quick lookups

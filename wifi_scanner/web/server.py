@@ -8,6 +8,8 @@ Starts a FastAPI server that:
 
 Run with:
     sudo wifi-scan-web [--host 0.0.0.0] [--port 8000]
+
+No authentication — office-LAN-only use. See README "Security" section.
 """
 
 from __future__ import annotations
@@ -140,6 +142,7 @@ def _host_dict(h: Host) -> dict:
     return {
         "ip": h.ip,
         "mac": h.mac,
+        "mac_known": h.mac_known,
         "vendor": h.vendor,
         "hostname": h.hostname,
         "device_type": h.device_type,
@@ -213,6 +216,7 @@ async def get_history(limit: int = 40):
 class ScanRequest(BaseModel):
     target: str = config.DEFAULT_TARGET
     mode: str = "full"
+    discovery: str = config.DEFAULT_DISCOVERY
     ports_profile: str = "common"
     no_ports: bool = False
     no_snmp: bool = False
@@ -233,6 +237,7 @@ async def trigger_scan(req: ScanRequest):
         cfg = ScanConfig(
             targets=targets,
             mode=req.mode,
+            discovery=req.discovery,
             ports_profile=req.ports_profile,
             ports=config.PORT_PROFILES.get(req.ports_profile, config.PORTS_COMMON),
             timeout=config.DEFAULT_ARP_TIMEOUT,
@@ -317,8 +322,8 @@ def main() -> None:
     import uvicorn
 
     parser = argparse.ArgumentParser(description="Network Scanner web dashboard")
-    parser.add_argument("--host", default="127.0.0.1",
-                        help="Bind host [default: 127.0.0.1]")
+    parser.add_argument("--host", default="0.0.0.0",
+                        help="Bind host [default: 0.0.0.0]")
     parser.add_argument("--port", type=int, default=8000,
                         help="Bind port [default: 8000]")
     parser.add_argument("--reload", action="store_true",

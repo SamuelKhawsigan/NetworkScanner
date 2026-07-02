@@ -18,7 +18,9 @@ from .. import config
 from ..scanner.models import Host
 
 # Flags too common to be worth alerting on (they're visible in the table).
-NON_ALERT_FLAGS = {"RANDOMIZED_MAC", "NO_HOSTNAME"}
+# NO_MAC_ICMP is expected on every host from an --discovery icmp sweep — it's
+# metadata about the discovery method, not a security concern.
+NON_ALERT_FLAGS = {"RANDOMIZED_MAC", "NO_HOSTNAME", "NO_MAC_ICMP"}
 
 
 @dataclass

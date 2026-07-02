@@ -29,6 +29,7 @@ class ScanConfig:
 
     targets: list[str]
     mode: str
+    discovery: str
     ports_profile: str
     ports: list[int]
     timeout: int
@@ -159,6 +160,10 @@ def apply_mode_overrides(cfg: ScanConfig) -> ScanConfig:
               help="Target network(s), comma-separated CIDRs.")
 @click.option("--mode", type=click.Choice(config.MODES), default=config.DEFAULT_MODE,
               show_default=True, help="Scan mode.")
+@click.option("--discovery", type=click.Choice(config.DISCOVERY_MODES),
+              default=config.DEFAULT_DISCOVERY, show_default=True,
+              help="Discovery method: arp (local broadcast domain, gives MAC) "
+                   "or icmp (routable across subnets/VLANs, IP-only — no MAC).")
 @click.option("--ports", "ports_profile", type=click.Choice(list(config.PORT_PROFILES)),
               default=config.DEFAULT_PORT_PROFILE, show_default=True,
               help="Port profile.")
@@ -188,7 +193,7 @@ def apply_mode_overrides(cfg: ScanConfig) -> ScanConfig:
 @click.option("--no-live", is_flag=True, help="Disable the live dashboard; print a static report.")
 @click.option("--dry-run", is_flag=True, help="Show the scan plan without sending packets.")
 @click.version_option(__version__, "-V", "--version", prog_name="wifi-scanner")
-def cli(target, mode, ports_profile, timeout, rate_pps, watch, interval, sort,
+def cli(target, mode, discovery, ports_profile, timeout, rate_pps, watch, interval, sort,
         filter_expr, output, out_file, no_ports, no_snmp, stealth, known_file,
         history_db, verbose, debug, update_oui, no_live, dry_run):
     """Office WiFi/LAN scanner — authorized network reconnaissance."""
@@ -199,6 +204,7 @@ def cli(target, mode, ports_profile, timeout, rate_pps, watch, interval, sort,
     cfg = ScanConfig(
         targets=targets,
         mode=mode,
+        discovery=discovery,
         ports_profile=ports_profile,
         ports=resolve_ports(ports_profile),
         timeout=timeout,
@@ -268,10 +274,39 @@ def run_scan(cfg: ScanConfig, console: "Console") -> None:
         run_single(cfg, console)
 
 
-def _run_pipeline(cfg: ScanConfig, reporter, console: "Console"):
-    """One full scan pass driving `reporter`: ARP -> OUI -> ports -> probe ->
-    classify. Returns (hosts, poison_alerts)."""
-    from .scanner import arp, classifier
+def _run_discovery(cfg: ScanConfig, reporter, console: "Console"):
+    """Run the configured discovery sweep (arp or icmp). Returns (hosts, poison)."""
+    if cfg.discovery == "icmp":
+        from .scanner import icmp
+
+        reporter.phase(f"ICMP sweep — {', '.join(cfg.targets)}", "arp")
+        try:
+            hosts, poison = icmp.icmp_sweep(
+                cfg.targets, timeout=config.DEFAULT_ICMP_TIMEOUT,
+                retries=config.DEFAULT_ICMP_RETRIES, rate_pps=cfg.rate_pps,
+            )
+        except PermissionError:
+            console.print(
+                "[red]Permission denied[/] — ICMP sweep needs raw sockets. "
+                "Re-run with [bold]sudo[/]."
+            )
+            return None, [], []
+        except ImportError as exc:
+            console.print(
+                f"[red]Missing dependency:[/] {exc}. "
+                "Install it with [bold]pip install scapy[/]."
+            )
+            return None, [], []
+        except OSError as exc:
+            console.print(f"[red]ICMP sweep failed:[/] {exc}")
+            return None, [], []
+        empty_hint = (
+            "[dim]ICMP sweep returned no replies — the target(s) may be "
+            "blocking ICMP, or unreachable from this host.[/]"
+        )
+        return hosts, poison, empty_hint
+
+    from .scanner import arp
 
     reporter.phase(f"ARP sweep — {', '.join(cfg.targets)}", "arp")
     try:
@@ -284,28 +319,41 @@ def _run_pipeline(cfg: ScanConfig, reporter, console: "Console"):
             "[red]Permission denied[/] — ARP sweep needs raw sockets. "
             "Re-run with [bold]sudo[/]."
         )
-        return [], []
+        return None, [], []
     except ImportError as exc:
         console.print(
             f"[red]Missing dependency:[/] {exc}. "
             "Install it with [bold]pip install scapy[/]."
         )
-        return [], []
+        return None, [], []
     except OSError as exc:
         console.print(f"[red]ARP sweep failed:[/] {exc}")
+        return None, [], []
+    empty_hint = (
+        "[dim]ARP sweep returned no replies — check that the target "
+        "network is reachable and that you are running as root.[/]"
+    )
+    return hosts, poison, empty_hint
+
+
+def _run_pipeline(cfg: ScanConfig, reporter, console: "Console"):
+    """One full scan pass driving `reporter`: discovery -> OUI -> ports ->
+    probe -> classify. Returns (hosts, poison_alerts)."""
+    from .scanner import classifier
+
+    hosts, poison, empty_hint = _run_discovery(cfg, reporter, console)
+    if hosts is None:
         return [], []
     reporter.finish("arp")
     reporter.set_hosts(hosts)
 
     if not hosts:
         if cfg.verbose:
-            console.print(
-                "[dim]ARP sweep returned no replies — check that the target "
-                "network is reachable and that you are running as root.[/]"
-            )
+            console.print(empty_hint)
         return hosts, poison
 
-    _annotate_oui(hosts)
+    if cfg.discovery == "arp":
+        _annotate_oui(hosts)
     _run_port_scan(cfg, hosts, reporter)
     _run_protocols(cfg, hosts, reporter)
 
@@ -636,6 +684,10 @@ def print_plan(cfg: ScanConfig, console: "Console") -> None:
     table.add_row("Targets", ", ".join(cfg.targets))
     table.add_row("Host addresses", str(cfg.hosts_total))
     table.add_row("Mode", cfg.mode)
+    if cfg.discovery == "icmp":
+        table.add_row("Discovery", "icmp (routable, cross-VLAN — IP only, no MAC)")
+    else:
+        table.add_row("Discovery", "arp (local broadcast domain — gives MAC)")
     port_note = "skipped" if cfg.no_ports else f"{cfg.ports_profile} ({len(cfg.ports)} ports)"
     table.add_row("Port scan", port_note)
     table.add_row("SNMP", "skipped" if cfg.no_snmp else "enabled")

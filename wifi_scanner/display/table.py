@@ -18,6 +18,15 @@ from .. import config
 from ..scanner.models import Host, PoisonAlert
 
 _DASH = "—"
+_NO_MAC = "(no MAC — ICMP)"
+
+
+def _fmt_mac(host: Host) -> Text:
+    """Blank MAC from a real attempt looks identical to "never attempted"
+    unless we say so explicitly — see the NO_MAC_ICMP risk flag."""
+    if not host.mac_known:
+        return Text(_NO_MAC, style="dim italic")
+    return Text(host.mac)
 
 
 def _fmt_rtt(ms: float | None) -> str:
@@ -92,7 +101,7 @@ def build_host_table(hosts: list[Host], title: str = "Discovered Hosts",
         # MAC like "c2:60:07:cd:e2:86" must not turn ":cd:" into 💿.
         table.add_row(
             Text(h.ip),
-            Text(h.mac),
+            _fmt_mac(h),
             Text(h.vendor) if h.vendor else Text(_DASH, style="dim"),
             Text(h.device_type) if h.device_type else Text(_DASH, style="dim"),
             Text(h.hostname) if h.hostname else Text(_DASH, style="dim"),

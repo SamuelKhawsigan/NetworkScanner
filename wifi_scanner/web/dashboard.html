@@ -256,13 +256,19 @@ tbody tr.row-warn:hover { background: rgba(210,153,34,.10); }
 
 <!-- ── Config Bar ───────────────────────────────────────────────────────── -->
 <div id="configBar">
-  <label>Target <input type="text" id="cfgTarget" value="10.8.50.0/23" placeholder="CIDR"></label>
+  <label>Target <input type="text" id="cfgTarget" value="10.8.9.0/24" placeholder="CIDR"></label>
   <div class="cfg-sep"></div>
   <label>Mode
     <select id="cfgMode">
       <option value="full">full</option>
       <option value="quick">quick</option>
       <option value="stealth">stealth</option>
+    </select>
+  </label>
+  <label title="arp: local broadcast domain, gives MAC. icmp: routable across subnets/VLANs, IP only — no MAC.">Discovery
+    <select id="cfgDiscovery">
+      <option value="arp">arp (LAN, MAC)</option>
+      <option value="icmp">icmp (cross-VLAN, IP only)</option>
     </select>
   </label>
   <label>Ports
@@ -318,7 +324,7 @@ tbody tr.row-warn:hover { background: rgba(210,153,34,.10); }
 
   <!-- Filter + count -->
   <div id="filterBar">
-    <input type="text" id="filterInput" placeholder="filter: type=router  flags=NEW_DEVICE  vendor=cisco  10.8.50"
+    <input type="text" id="filterInput" placeholder="filter: type=router  flags=NEW_DEVICE  vendor=cisco  10.8.9"
            oninput="applyFilter()">
     <button class="btn btn-secondary" onclick="clearFilter()">✕</button>
     <span id="hostCount"></span>
@@ -443,6 +449,7 @@ async function startScan() {
   if (state.scanning) return;
   const target      = document.getElementById('cfgTarget').value.trim();
   const mode        = document.getElementById('cfgMode').value;
+  const discovery   = document.getElementById('cfgDiscovery').value;
   const portsProf   = document.getElementById('cfgPorts').value;
   const noPorts     = document.getElementById('cfgNoPorts').checked;
   const noSnmp      = document.getElementById('cfgNoSnmp').checked;
@@ -451,7 +458,7 @@ async function startScan() {
     await api('/api/scan', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({target, mode, ports_profile: portsProf,
+      body: JSON.stringify({target, mode, discovery, ports_profile: portsProf,
                             no_ports: noPorts, no_snmp: noSnmp}),
     });
     state.scanning = true;
@@ -636,10 +643,13 @@ function renderTable() {
     const color   = confColor(h.confidence);
     const barW    = h.confidence;
     const cls     = rowClass(h);
-    const mac     = h.mac || '—';
-    const macDisp = h.risk_flags.includes('RANDOMIZED_MAC')
-                    ? `<span title="Randomized MAC" style="color:var(--yellow)">${mac}</span>`
-                    : mac;
+    // mac_known === false means MAC was never attempted (e.g. ICMP
+    // discovery) — render that distinctly, not as a blank/failed lookup.
+    const macDisp = h.mac_known === false
+                    ? `<span style="color:var(--dim);font-style:italic" title="Discovered via ICMP — no MAC attempted">(no MAC — ICMP)</span>`
+                    : (h.risk_flags.includes('RANDOMIZED_MAC')
+                       ? `<span title="Randomized MAC" style="color:var(--yellow)">${h.mac || '—'}</span>`
+                       : (h.mac || '—'));
     return `<tr class="${cls}">
       <td class="td-ip">${h.ip}</td>
       <td class="td-mac">${macDisp}</td>

@@ -26,6 +26,14 @@ def host(ip, mac, **kw) -> Host:
     return h
 
 
+def icmp_host(ip, **kw) -> Host:
+    """An ICMP-discovered host: no MAC ever attempted."""
+    h = Host(ip=ip, mac="", mac_known=False, risk_flags=["NO_MAC_ICMP"])
+    for k, v in kw.items():
+        setattr(h, k, v)
+    return h
+
+
 class TestBaseline(unittest.TestCase):
     def test_first_scan_is_baseline_no_new_device(self):
         db = HistoryDB(":memory:")
@@ -124,6 +132,114 @@ class TestPersistence(unittest.TestCase):
         db.record_scan([host("10.8.50.1", "aa:bb:cc:00:00:01")], now=T1)
         self.assertEqual(db.get_device("aa:bb:cc:00:00:01")["hostname"], "gw")
         db.close()
+
+
+class TestIcmpIdentityFallback(unittest.TestCase):
+    """ICMP-discovered hosts (mac_known=False) have no MAC, so history.py
+    falls back to an IP-based identity key for them. See the history.py
+    module docstring and README "Discovery methods" for the known DHCP
+    tradeoff this implies.
+    """
+
+    def test_two_icmp_hosts_same_scan_dont_collide(self):
+        db = HistoryDB(":memory:")
+        hosts = [icmp_host("10.8.9.20"), icmp_host("10.8.9.21")]
+        events = db.record_scan(hosts, now=T0)   # must not raise (UNIQUE mac)
+        self.assertEqual(events, [])
+        self.assertEqual(db.device_count(), 2)
+        db.close()
+
+    def test_icmp_baseline_scan_no_new_device(self):
+        db = HistoryDB(":memory:")
+        h = icmp_host("10.8.9.20")
+        events = db.record_scan([h], now=T0)
+        self.assertEqual(events, [])
+        self.assertNotIn("NEW_DEVICE", h.risk_flags)
+        db.close()
+
+    def test_icmp_host_new_ip_is_new_device_not_ip_changed(self):
+        """Known limitation, not a bug: an ICMP identity is IP-shaped, so a
+        device that gets a new DHCP lease looks like a brand-new device
+        rather than an IP_CHANGED on a known one."""
+        db = HistoryDB(":memory:")
+        db.record_scan([icmp_host("10.8.9.20")], now=T0)
+        moved = icmp_host("10.8.9.55")
+        events = db.record_scan([moved], now=T1)
+        self.assertEqual([e.event_type for e in events], ["NEW_DEVICE"])
+        self.assertIn("NEW_DEVICE", moved.risk_flags)
+        db.close()
+
+    def test_arp_then_icmp_same_ip_no_spurious_mac_changed(self):
+        """A real MAC seen via ARP, then the same IP seen via an ICMP sweep
+        (no MAC), must not fire MAC_CHANGED — that flag means possible
+        spoofing, and switching discovery method isn't that."""
+        db = HistoryDB(":memory:")
+        db.record_scan([host("10.8.9.20", "aa:bb:cc:00:00:01")], now=T0)
+        via_icmp = icmp_host("10.8.9.20")
+        events = db.record_scan([via_icmp], now=T1)
+        kinds = {e.event_type for e in events}
+        self.assertNotIn("MAC_CHANGED", kinds)
+        self.assertNotIn("MAC_CHANGED", via_icmp.risk_flags)
+        db.close()
+
+    def test_icmp_then_arp_same_ip_no_spurious_mac_changed(self):
+        """Same as above, reversed order: ICMP first, then a real MAC shows
+        up on that IP via ARP — also not a MAC_CHANGED."""
+        db = HistoryDB(":memory:")
+        db.record_scan([icmp_host("10.8.9.20")], now=T0)
+        via_arp = host("10.8.9.20", "aa:bb:cc:00:00:01")
+        events = db.record_scan([via_arp], now=T1)
+        kinds = {e.event_type for e in events}
+        self.assertNotIn("MAC_CHANGED", kinds)
+        self.assertNotIn("MAC_CHANGED", via_arp.risk_flags)
+        db.close()
+
+    def test_migration_adds_mac_known_column_to_old_db(self):
+        """A history.db created before mac_known existed must open and work
+        without manual migration."""
+        import sqlite3
+
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        try:
+            conn = sqlite3.connect(path)
+            conn.executescript("""
+                CREATE TABLE devices (
+                    id INTEGER PRIMARY KEY,
+                    mac TEXT NOT NULL UNIQUE,
+                    ip TEXT,
+                    hostname TEXT,
+                    vendor TEXT,
+                    device_type TEXT,
+                    os TEXT,
+                    first_seen DATETIME,
+                    last_seen DATETIME,
+                    scan_count INTEGER DEFAULT 1
+                );
+                CREATE TABLE events (
+                    id INTEGER PRIMARY KEY,
+                    timestamp DATETIME,
+                    event_type TEXT,
+                    mac TEXT,
+                    ip TEXT,
+                    detail TEXT
+                );
+            """)
+            conn.execute(
+                "INSERT INTO devices(mac, ip, first_seen, last_seen) "
+                "VALUES ('aa:bb:cc:00:00:01', '10.8.9.1', ?, ?)",
+                (T0.isoformat(), T0.isoformat()),
+            )
+            conn.commit()
+            conn.close()
+
+            db = HistoryDB(path)                # must not raise
+            row = db.get_device("aa:bb:cc:00:00:01")
+            self.assertEqual(row["mac_known"], 1)   # migrated default
+            db.record_scan([icmp_host("10.8.9.20")], now=T1)  # must not raise
+            db.close()
+        finally:
+            os.unlink(path)
 
 
 if __name__ == "__main__":

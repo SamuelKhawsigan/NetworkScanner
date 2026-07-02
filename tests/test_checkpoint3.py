@@ -148,6 +148,16 @@ class TestOuiLookup(unittest.TestCase):
         self.assertEqual(host.risk_flags.count("RANDOMIZED_MAC"), 1)
         lk.close()
 
+    def test_annotate_no_ops_for_mac_known_false(self):
+        # ICMP-discovered hosts never attempted a MAC — OUI lookup must not
+        # guess a vendor or flag RANDOMIZED_MAC for them.
+        lk = OuiLookup(db_path=self.db_path)
+        host = Host(ip="10.8.9.20", mac="", mac_known=False)
+        lk.annotate(host)
+        self.assertIsNone(host.vendor)
+        self.assertNotIn("RANDOMIZED_MAC", host.risk_flags)
+        lk.close()
+
 
 class TestMissingDb(unittest.TestCase):
     def test_lookup_without_db_still_detects_randomized(self):

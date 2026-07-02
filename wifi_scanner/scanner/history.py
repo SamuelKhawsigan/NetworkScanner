@@ -1,12 +1,22 @@
 """Historical device tracking in SQLite (`data/history.db`).
 
-Each scan upserts a row per MAC in `devices` (first/last seen, scan count) and
-records change `events` by diffing the current hosts against stored state:
+Each scan upserts a row per *identity key* in `devices` (first/last seen, scan
+count) and records change `events` by diffing the current hosts against
+stored state:
 
-- NEW_DEVICE  — a MAC never seen before (suppressed on the very first scan,
-  which only establishes a baseline, and for whitelisted MACs)
-- IP_CHANGED  — a known MAC now answers on a different IP
+- NEW_DEVICE  — an identity never seen before (suppressed on the very first
+  scan, which only establishes a baseline, and for whitelisted MACs)
+- IP_CHANGED  — a known identity now answers on a different IP
 - MAC_CHANGED — an IP previously owned by one MAC is now answered by another
+
+The identity key is the host's MAC when one was attempted (ARP discovery,
+`host.mac_known=True`), or `ip:<ip>` when it wasn't (ICMP discovery — see
+scanner/icmp.py). The `devices.mac` column holds whichever of those applies;
+`mac_known` records which kind it is. This is a real tradeoff, not a bug: on
+a DHCP network, an IP-keyed ICMP identity is only as stable as the lease, so
+a device getting a new IP looks like a brand-new device (a false-positive
+NEW_DEVICE) rather than an IP_CHANGED on an already-known device. See the
+README "ICMP discovery" note.
 
 The detected changes are written back onto the hosts as risk flags so they show
 up in the table and alerts.
@@ -32,7 +42,8 @@ CREATE TABLE IF NOT EXISTS devices (
     os TEXT,
     first_seen DATETIME,
     last_seen DATETIME,
-    scan_count INTEGER DEFAULT 1
+    scan_count INTEGER DEFAULT 1,
+    mac_known INTEGER DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY,
@@ -45,6 +56,15 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_devices_mac ON devices(mac);
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp);
 """
+
+
+def _identity_key(host: Host) -> str:
+    """MAC when one was attempted, else a synthesized IP-based identity.
+
+    See the module docstring for why this is a deliberate tradeoff for
+    ICMP-discovered (mac_known=False) hosts, not a bug.
+    """
+    return host.mac if host.mac_known else f"ip:{host.ip}"
 
 
 @dataclass
@@ -66,14 +86,22 @@ class HistoryDB:
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self) -> None:
+        """Additive migration for DBs created before `mac_known` existed —
+        CREATE TABLE IF NOT EXISTS in SCHEMA doesn't touch existing tables."""
+        cols = {row["name"] for row in self.conn.execute("PRAGMA table_info(devices)")}
+        if "mac_known" not in cols:
+            self.conn.execute("ALTER TABLE devices ADD COLUMN mac_known INTEGER DEFAULT 1")
 
     # -- internal helpers ------------------------------------------------- #
     def _load_state(self):
         rows = self.conn.execute("SELECT * FROM devices").fetchall()
-        by_mac = {r["mac"]: r for r in rows}
-        ip_to_mac = {r["ip"]: r["mac"] for r in rows if r["ip"]}
-        return by_mac, ip_to_mac
+        by_identity = {r["mac"]: r for r in rows}
+        ip_to_identity = {r["ip"]: r["mac"] for r in rows if r["ip"]}
+        return by_identity, ip_to_identity
 
     def _insert_event(self, event: HistoryEvent) -> None:
         self.conn.execute(
@@ -85,9 +113,10 @@ class HistoryDB:
     def _insert_device(self, host: Host, ts: str) -> None:
         self.conn.execute(
             "INSERT INTO devices(mac, ip, hostname, vendor, device_type, os, "
-            "first_seen, last_seen, scan_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)",
-            (host.mac, host.ip, host.hostname, host.vendor, host.device_type,
-             host.os, ts, ts),
+            "first_seen, last_seen, scan_count, mac_known) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
+            (_identity_key(host), host.ip, host.hostname, host.vendor,
+             host.device_type, host.os, ts, ts, int(host.mac_known)),
         )
 
     def _update_device(self, host: Host, ts: str) -> None:
@@ -95,10 +124,10 @@ class HistoryDB:
         self.conn.execute(
             "UPDATE devices SET ip = ?, hostname = COALESCE(?, hostname), "
             "vendor = COALESCE(?, vendor), device_type = COALESCE(?, device_type), "
-            "os = COALESCE(?, os), last_seen = ?, scan_count = scan_count + 1 "
-            "WHERE mac = ?",
+            "os = COALESCE(?, os), last_seen = ?, scan_count = scan_count + 1, "
+            "mac_known = ? WHERE mac = ?",
             (host.ip, host.hostname, host.vendor, host.device_type, host.os,
-             ts, host.mac),
+             ts, int(host.mac_known), _identity_key(host)),
         )
 
     @staticmethod
@@ -113,32 +142,41 @@ class HistoryDB:
         now = now or datetime.now(timezone.utc)
         ts = now.isoformat()
         known_macs = known_macs or set()
-        by_mac, ip_to_mac = self._load_state()
-        baseline = not by_mac                  # first ever scan -> no NEW_DEVICE
+        by_identity, ip_to_identity = self._load_state()
+        baseline = not by_identity              # first ever scan -> no NEW_DEVICE
         events: list[HistoryEvent] = []
 
-        def emit(event_type, mac, ip, detail):
-            event = HistoryEvent(event_type, mac, ip, detail, ts)
+        def emit(event_type, identity, ip, detail):
+            event = HistoryEvent(event_type, identity, ip, detail, ts)
             self._insert_event(event)
             events.append(event)
             return event
 
         for host in hosts:
-            prev_mac_for_ip = ip_to_mac.get(host.ip)
-            if prev_mac_for_ip and prev_mac_for_ip != host.mac:
-                emit("MAC_CHANGED", host.mac, host.ip,
-                     f"IP {host.ip} was {prev_mac_for_ip}, now {host.mac}")
+            identity = _identity_key(host)
+            prev_identity_for_ip = ip_to_identity.get(host.ip)
+            prev_row_for_ip = (by_identity.get(prev_identity_for_ip)
+                               if prev_identity_for_ip else None)
+            prev_was_real_mac = bool(prev_row_for_ip and prev_row_for_ip["mac_known"])
+            # Only a real MAC->MAC mismatch counts as MAC_CHANGED. If either
+            # side is a synthesized ip:<ip> identity (ICMP discovery), the
+            # "change" is just a different discovery method or a missed MAC
+            # probe, not evidence of spoofing/replacement.
+            if (prev_identity_for_ip and prev_identity_for_ip != identity
+                    and host.mac_known and prev_was_real_mac):
+                emit("MAC_CHANGED", identity, host.ip,
+                     f"IP {host.ip} was {prev_identity_for_ip}, now {identity}")
                 self._flag(host, "MAC_CHANGED")
 
-            prev = by_mac.get(host.mac)
+            prev = by_identity.get(identity)
             if prev is None:
-                if not baseline and host.mac not in known_macs:
-                    emit("NEW_DEVICE", host.mac, host.ip, f"first seen at {host.ip}")
+                if not baseline and identity not in known_macs:
+                    emit("NEW_DEVICE", identity, host.ip, f"first seen at {host.ip}")
                     self._flag(host, "NEW_DEVICE")
                 self._insert_device(host, ts)
             else:
                 if prev["ip"] and prev["ip"] != host.ip:
-                    emit("IP_CHANGED", host.mac, host.ip,
+                    emit("IP_CHANGED", identity, host.ip,
                          f"{prev['ip']} -> {host.ip}")
                     self._flag(host, "IP_CHANGED")
                 # Surface the true first-seen for reporting/export.

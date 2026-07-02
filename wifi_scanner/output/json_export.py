@@ -26,6 +26,7 @@ def host_to_dict(host: Host) -> dict:
     return {
         "ip": host.ip,
         "mac": host.mac,
+        "mac_known": host.mac_known,
         "vendor": host.vendor,
         "hostname": host.hostname,
         "device_type": host.device_type,

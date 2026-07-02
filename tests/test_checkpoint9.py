@@ -51,6 +51,16 @@ class TestHostToDict(unittest.TestCase):
         d = json_export.host_to_dict(sample_hosts()[0])
         self.assertEqual(d["first_seen"], TS.isoformat())
 
+    def test_mac_known_true_for_arp_host(self):
+        d = json_export.host_to_dict(sample_hosts()[0])
+        self.assertTrue(d["mac_known"])
+
+    def test_mac_known_false_for_icmp_host(self):
+        h = Host(ip="10.8.9.20", mac="", mac_known=False, risk_flags=["NO_MAC_ICMP"])
+        d = json_export.host_to_dict(h)
+        self.assertFalse(d["mac_known"])
+        self.assertEqual(d["mac"], "")
+
 
 class TestBuildReport(unittest.TestCase):
     def setUp(self):
@@ -110,6 +120,7 @@ class TestCsvExport(unittest.TestCase):
             self.assertEqual(rows[0]["open_ports"], "22;23;80")
             self.assertEqual(rows[0]["risk_flags"], "OPEN_TELNET")
             self.assertIn("22:SSH", rows[0]["services"])
+            self.assertEqual(rows[0]["mac_known"], "True")
         finally:
             os.unlink(path)
 

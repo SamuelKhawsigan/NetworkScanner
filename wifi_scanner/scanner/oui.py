@@ -206,7 +206,14 @@ class OuiLookup:
         return info
 
     def annotate(self, host: Host) -> MacInfo:
-        """Set host.vendor and append RANDOMIZED_MAC where applicable."""
+        """Set host.vendor and append RANDOMIZED_MAC where applicable.
+
+        No-op when no MAC was ever attempted (e.g. ICMP discovery) — there's
+        nothing to look up, and guessing would conflate "no MAC" with a
+        failed lookup.
+        """
+        if not host.mac_known:
+            return MacInfo()
         info = self.lookup(host.mac)
         if info.vendor:
             host.vendor = info.vendor

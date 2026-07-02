@@ -147,6 +147,26 @@ class TestTableRendering(unittest.TestCase):
         table = build_host_table([h])
         self.assertEqual(table.row_count, 1)
 
+    def test_icmp_host_mac_column_marked_not_blank(self):
+        # mac_known=False must render as an explicit marker, never as a
+        # blank cell indistinguishable from "MAC lookup failed".
+        from rich.console import Console
+        h = Host(ip="10.8.9.20", mac="", mac_known=False, risk_flags=["NO_MAC_ICMP"])
+        console = Console(width=120, record=True)
+        console.print(build_host_table([h]))
+        out = console.export_text()
+        self.assertIn("no MAC", out)
+        self.assertIn("ICMP", out)
+
+    def test_arp_host_mac_column_unaffected(self):
+        h = Host(ip="10.8.50.9", mac="aa:bb:cc:dd:ee:09")
+        from rich.console import Console
+        console = Console(width=120, record=True)
+        console.print(build_host_table([h]))
+        out = console.export_text()
+        self.assertIn("aa:bb:cc:dd:ee:09", out)
+        self.assertNotIn("no MAC", out)
+
     def test_poison_panel_smoke(self):
         from wifi_scanner.scanner.models import PoisonAlert
         panel = build_poison_panel([PoisonAlert(ip="10.8.50.7", macs=["a", "b"])])
