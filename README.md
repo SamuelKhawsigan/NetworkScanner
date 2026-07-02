@@ -1,43 +1,107 @@
 # Office WiFi / LAN Scanner
 
-A professional-grade network reconnaissance tool for authorized IT and security work on corporate LANs. Discovers every live host via ARP, fingerprints each device using SNMP, mDNS, NetBIOS, SMB, UPnP, and HTTP, scores classification confidence, and flags security risks — all in a live rich-terminal dashboard.
+A professional-grade network reconnaissance tool for authorized IT and security work on corporate LANs. It discovers live hosts (ARP for same-subnet MAC-level detail, or ICMP for cross-VLAN reach), scans ports, and fingerprints each device using SNMP, mDNS, NetBIOS, SMB, UPnP, and HTTP. It scores classification confidence, flags security risks, tracks device history across scans, and supports a known-device whitelist — surfaced through either a live rich-terminal dashboard or an optional web dashboard.
+
+## Security
+
+**The web dashboard (`wifi-scan-web`) has NO authentication.** Anyone who can
+reach the bound host/port gets full read access to scan results and can
+trigger new scans. This is a deliberate, current tradeoff for office-LAN-only
+use, not an oversight — but it means:
+
+- Only run it on trusted office-LAN networks.
+- Never port-forward it or put it behind an internet-facing reverse proxy.
+- If that assumption ever changes (remote access, untrusted network, etc.),
+  authentication must be added first.
 
 ## Requirements
 
-- Python 3.10+
-- Root / Administrator privileges (scapy needs raw sockets)
-- Linux or WSL2 (Windows with mirrored networking mode — see below)
+- Python 3.10+ (tested on 3.12)
+- Linux (or WSL2 on Windows — see the WSL2 note below)
+- **Raw-socket privileges** — root, or the `CAP_NET_RAW` capability. See the
+  callout under Installation; this is the single most common deployment
+  snag.
 
-## Installation
+### Raw sockets: root / CAP_NET_RAW (read this before deploying)
+
+All discovery (ARP and ICMP) and the TCP/banner probing send raw packets via
+scapy, which **requires elevated privileges**. In practice:
+
+- Running with `sudo` (or as root) just works.
+- In an **unprivileged container** (LXC/Docker without extra capabilities),
+  raw sockets are blocked and scans silently return zero hosts even though
+  the network is reachable. Grant the container `CAP_NET_RAW` (and
+  `CAP_NET_ADMIN` for some interface operations), or run it privileged.
+- To grant the capability to the interpreter instead of using `sudo`:
+  `sudo setcap cap_net_raw,cap_net_admin+eip $(readlink -f venv/bin/python3)`
+  — note this must be re-applied if the venv's Python is replaced.
+
+If a scan comes back empty on a network you know is populated, this is almost
+always the cause.
+
+## Installation (clean Ubuntu machine or container)
 
 ```bash
-git clone <repo>
-cd NetworkScanner/wifi_scanner
-python3 -m venv venv && source venv/bin/activate
-pip install -e .
+# 1. System packages
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip git libpcap0.8 tcpdump
+
+# 2. Clone
+git clone https://github.com/SamuelKhawsigan/NetworkScanner.git
+cd NetworkScanner
+
+# 3. Virtualenv + dependencies
+python3 -m venv venv
+source venv/bin/activate
+pip install -e .                         # installs deps + the console scripts
+# (equivalently: pip install -r wifi_scanner/requirements.txt)
 ```
 
-Or install the `wifi-scan` launcher directly:
+`libpcap0.8` and `tcpdump` back scapy's layer-2 send/receive path; scapy will
+run without them via native raw sockets but is more reliable with them
+present. `pip install -e .` also installs the `wifi-scan` (CLI) and
+`wifi-scan-web` (dashboard) launchers.
 
-```bash
-pip install -e NetworkScanner/wifi_scanner
-```
+The repo also ships `./wifi-scan` and `./wifi-scan-web` wrapper scripts that
+invoke the repo-root `venv` directly, so you can run them without activating
+the venv first.
 
 ## Quick start
 
 ```bash
-# Full scan of the default office subnet
-sudo wifi-scan
+# Full scan of the default subnet (ARP discovery — same-subnet, gives MACs)
+sudo ./wifi-scan
+
+# Cross-VLAN discovery via ICMP (routable, IP-only — no MAC)
+sudo ./wifi-scan --discovery icmp --target 10.8.0.0/16
 
 # Quick ARP-only sweep (no port scan, ~30s)
-sudo wifi-scan --mode quick
+sudo ./wifi-scan --mode quick
 
 # Continuous watch mode — alerts on new/changed devices
-sudo wifi-scan --mode watch --interval 60
+sudo ./wifi-scan --mode watch --interval 60
 
 # Scan a different subnet, export to JSON
-sudo wifi-scan --target 192.168.1.0/24 --output json --out-file scan.json
+sudo ./wifi-scan --target 192.168.1.0/24 --output json --out-file scan.json
 ```
+
+## Web dashboard
+
+A single-page web UI (FastAPI + server-sent events) that runs scans on demand,
+streams progress live, and shows the device table, security alerts, and
+history — with ARP/ICMP discovery selectable per scan.
+
+```bash
+# Start it (binds 0.0.0.0:8000 by default — reachable from the office LAN)
+sudo ./wifi-scan-web
+
+# Then open http://<this-host-ip>:8000/ in a browser
+# Bind to loopback only, or a different port:
+sudo ./wifi-scan-web --host 127.0.0.1 --port 8080
+```
+
+> **No authentication** — see the [Security](#security) section. Office-LAN
+> use only.
 
 ## Scan modes
 
@@ -48,15 +112,42 @@ sudo wifi-scan --target 192.168.1.0/24 --output json --out-file scan.json
 | `stealth` | Low packet rate, no SNMP/banners, passive protocols only  | 5–10 min        |
 | `watch`   | Continuous re-scan loop, alerts on new/changed devices    | indefinite      |
 
+## Discovery methods (`--discovery`)
+
+Two genuinely different capabilities — pick one, they're not interchangeable:
+
+| Method | Reach | Identity | Trigger |
+|--------|-------|----------|---------|
+| `arp` (default) | Local broadcast domain only (same subnet/VLAN as this host) | MAC address | `--discovery arp` |
+| `icmp` | Routable — reaches hosts on other subnets/VLANs that ARP can't see | **IP only, no MAC** | `--discovery icmp` |
+
+`--discovery icmp` runs an ICMP echo (ping) sweep instead of ARP. It finds
+hosts ARP can never see (different VLAN, routed subnet), but every host it
+finds is `NO_MAC_ICMP`-flagged and shows `(no MAC — ICMP)` in the MAC column
+— OUI vendor lookup, `RANDOMIZED_MAC` detection, and ARP-poison detection are
+all skipped for these hosts since none of them are meaningful without a MAC.
+Port scanning, protocol fingerprinting, and classification still run
+normally (they work over IP).
+
+**History/tracking tradeoff:** device history is normally keyed by MAC. ICMP
+hosts have none, so they're tracked by IP instead. On a DHCP network this
+means an ICMP-discovered "new" device might just be an existing device that
+got handed a new IP — a false-positive `NEW_DEVICE`, not a bug. Treat
+`NEW_DEVICE` alerts from ICMP-discovered hosts with that in mind; ARP-sourced
+`NEW_DEVICE` alerts (keyed on real MACs) don't have this caveat.
+
 ## CLI reference
 
 ```
 Usage: wifi-scan [OPTIONS]
 
 Options:
-  --target CIDR           Target network(s), comma-separated [default: 10.8.50.0/23]
+  --target CIDR           Target network(s), comma-separated [default: 10.8.9.0/24]
   --mode [quick|full|stealth|watch]
                           Scan mode [default: full]
+  --discovery [arp|icmp]  Discovery method: arp (local broadcast domain,
+                          gives MAC) or icmp (routable cross-VLAN, IP only —
+                          no MAC) [default: arp]
   --ports [common|full|iot|printer|camera]
                           Port profile [default: common]
   --timeout SECS          ARP timeout per sweep [default: 2]
@@ -111,7 +202,8 @@ Each discovered host is annotated with any applicable risk flags:
 | `IP_CHANGED`      | Warn     | Known MAC moved to a different IP                     |
 | `RANDOMIZED_MAC`  | Info     | Locally administered (randomized) MAC address         |
 | `NO_HOSTNAME`     | Info     | No hostname resolvable by any protocol                |
-| `STEALTHY`        | Info     | Responds to ARP but exposes no open ports or signals  |
+| `STEALTHY`        | Info     | Responds to discovery probe but exposes no open ports or signals |
+| `NO_MAC_ICMP`      | Info     | Found via `--discovery icmp` — no MAC was attempted   |
 
 Table rows are colour-coded: **red** = high-severity flag, **yellow** = warning, normal = clean.
 
@@ -167,6 +259,7 @@ sudo wifi-scan --filter vendor=cisco
     {
       "ip": "10.8.50.1",
       "mac": "aa:bb:cc:dd:ee:ff",
+      "mac_known": true,
       "vendor": "Cisco Systems",
       "hostname": "gw-office",
       "device_type": "Router",
@@ -215,6 +308,25 @@ networkingMode=mirrored
 
 If ARP returns no results and you're on WSL2, this is almost certainly the cause. The scanner will remind you with a warning at startup and again if the sweep comes back empty.
 
+## Known limitations
+
+- **ARP discovery is same-subnet only.** ARP is a layer-2 broadcast protocol,
+  so `--discovery arp` only sees hosts in the scanner's own broadcast domain
+  (same subnet/VLAN). It cannot reach across a router. Use `--discovery icmp`
+  for other subnets/VLANs.
+- **ICMP discovery has no MAC**, which weakens identity-based features for
+  those hosts: no vendor lookup, no randomized-MAC detection, and rogue/new-
+  device detection falls back to IP-based identity. On DHCP networks that
+  makes cross-VLAN `NEW_DEVICE` results less reliable (a re-leased IP can look
+  like a new device). ICMP-discovered hosts are explicitly marked
+  `(no MAC — ICMP)` / `NO_MAC_ICMP` so this is never ambiguous. Hosts that
+  block ICMP echo won't appear at all in this mode.
+- **The web dashboard has no authentication, by design** (office-LAN-only —
+  see [Security](#security)). Anyone who can reach the port can view results
+  and start scans. Don't expose it beyond a trusted network.
+- **Fingerprinting is best-effort.** Classification and OS/vendor guesses are
+  confidence-scored, not authoritative; treat low-confidence rows accordingly.
+
 ## Architecture
 
 ```
@@ -222,8 +334,9 @@ wifi_scanner/
 ├── main.py               # Entry point, CLI, scan orchestration
 ├── config.py             # All constants and defaults
 ├── scanner/
-│   ├── arp.py            # ARP discovery engine (scapy)
-│   ├── port_scan.py      # Async TCP SYN scanner + banner grabbing
+│   ├── arp.py            # ARP discovery engine (scapy, same-subnet, gives MAC)
+│   ├── icmp.py           # ICMP echo discovery engine (scapy, routable, IP-only)
+│   ├── port_scan.py      # Async TCP connect scanner + banner grabbing
 │   ├── protocols.py      # NetBIOS, mDNS, SMB, SNMP, UPnP, HTTP probers
 │   ├── oui.py            # MAC → vendor lookup (local SQLite + API fallback)
 │   ├── fingerprint.py    # Multi-signal evidence gathering
@@ -235,16 +348,18 @@ wifi_scanner/
 │   ├── live_view.py      # rich.Live dashboard
 │   ├── table.py          # Device table + summary rendering
 │   └── alerts.py         # Security alert panel
-└── output/
-    ├── json_export.py    # JSON report builder
-    └── csv_export.py     # CSV export
+├── output/
+│   ├── json_export.py    # JSON report builder
+│   └── csv_export.py     # CSV export
+└── web/
+    ├── server.py         # FastAPI app + SSE live updates
+    └── dashboard.html    # Single-page web dashboard
 ```
 
 ## Running tests
 
 ```bash
 cd NetworkScanner
-source wifi_scanner/venv/bin/activate
-pip install pytest
-python -m pytest tests/ -v
+source venv/bin/activate
+python -m unittest discover -s tests -v
 ```
