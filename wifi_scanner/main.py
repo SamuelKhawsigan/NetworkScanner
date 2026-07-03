@@ -398,10 +398,19 @@ def run_single(cfg: ScanConfig, console: "Console") -> None:
 
     if not hosts:
         if not interrupted:
-            console.print(
-                "[yellow]No hosts answered.[/] On WSL2 this usually means "
-                "mirrored networking isn't active — see the note above."
-            )
+            msg = "[yellow]No hosts answered.[/]"
+            if cfg.discovery == "arp":
+                msg += (
+                    " ARP is layer-2 and only sees the scanner's own subnet/"
+                    "VLAN — hosts behind a router won't answer (try "
+                    "[bold]--discovery icmp[/])."
+                )
+                if is_wsl():
+                    msg += (
+                        " On WSL2 this usually means mirrored networking "
+                        "isn't active — see the note above."
+                    )
+            console.print(msg)
         return
 
     events = _record_history(cfg, hosts, console)

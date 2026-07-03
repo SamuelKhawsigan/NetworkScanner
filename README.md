@@ -17,7 +17,7 @@ use, not an oversight — but it means:
 ## Requirements
 
 - Python 3.10+ (tested on 3.12)
-- Linux (or WSL2 on Windows — see the WSL2 note below)
+- Linux
 - **Raw-socket privileges** — root, or the `CAP_NET_RAW` capability. See the
   callout under Installation; this is the single most common deployment
   snag.
@@ -294,19 +294,6 @@ The scanner maintains a SQLite database (`data/history.db` by default) across sc
 - Sets risk flags on affected hosts so they surface in the live dashboard
 
 Use `--history-db` to point at a different database, or `--known-file` to whitelist devices that should never appear as `NEW_DEVICE`.
-
-## WSL2 note
-
-ARP scanning requires WSL2 to be in **mirrored networking mode** so it can reach the office LAN's broadcast domain.
-
-Add this to `%USERPROFILE%\.wslconfig` on Windows, then restart WSL:
-
-```ini
-[wsl2]
-networkingMode=mirrored
-```
-
-If ARP returns no results and you're on WSL2, this is almost certainly the cause. The scanner will remind you with a warning at startup and again if the sweep comes back empty.
 
 ## Known limitations
 
